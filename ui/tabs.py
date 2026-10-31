@@ -95,7 +95,7 @@ def _stored(name: str, s: Settings):
 def _chart(fig, container=None) -> None:
     """Render a figure with a deterministic unique key (counter reset at each script run)."""
     st.session_state["_chart_n"] = st.session_state.get("_chart_n", 0) + 1
-    (container or st).plotly_chart(fig, use_container_width=True, key=f"chart_{st.session_state['_chart_n']}")
+    (container or st).plotly_chart(fig, width="stretch", key=f"chart_{st.session_state['_chart_n']}")
 
 
 def _fmt(df: pd.DataFrame) -> pd.DataFrame:
@@ -210,7 +210,7 @@ def render_sweeps(s: Settings) -> None:
     tb = paired_sweep_table(B, "neuron", "healthy", "neuron_loss", "success").rename(
         columns={"neuron_loss": "level"}).assign(condition="neuron")
     st.dataframe(_fmt(pd.concat([ta, tb])[["condition", "level", "mean_diff", "lo", "hi", "wilcoxon_p", "n_trials"]]),
-                 use_container_width=True, hide_index=True)
+                 width="stretch", hide_index=True)
 
 
 # --------------------------------------------------------------- 4. combined
@@ -244,7 +244,7 @@ def render_combined(s: Settings) -> None:
     _chart(pl.fig_condition_bars(summarise(pick, ["condition"], ["success"]), "success", ylabel="retrieval success rate"))
     st.subheader("Interaction (additivity) table")
     it = cm.interaction_table(df, "success")
-    st.dataframe(_fmt(it), use_container_width=True, hide_index=True)
+    st.dataframe(_fmt(it), width="stretch", hide_index=True)
     st.caption("deficit = healthy success − condition success (paired per trial). interaction = combined deficit − "
                "(synaptic deficit + neuron deficit). Positive: combined damage is worse than the sum of its parts; "
                "negative: better than additive (partly overlapping damage). Descriptive only; deficits are not clipped.")
@@ -340,7 +340,7 @@ def render_summary(s: Settings) -> None:
         _chart(pl.fig_condition_bars(summ, "success", ylabel="success (survivors)"))
     with b:
         _chart(pl.fig_condition_bars(summ, "success_all", ylabel="success (all N)"))
-    st.dataframe(_fmt(summ), use_container_width=True, hide_index=True)
+    st.dataframe(_fmt(summ), width="stretch", hide_index=True)
     meta = json.dumps(df.attrs.get("meta", {}), sort_keys=True)
     csv = f"# config: {meta}\n" + df.to_csv(index=False)
     st.download_button("Download trial-level CSV (config JSON in header comment)", csv,

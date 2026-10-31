@@ -2,3 +2,6 @@ results/
 __pycache__/
 *.pyc
 .pytest_cache/
+.venv/
+.agents/skills/developing-with-streamlit
+.claude/skills/developing-with-streamlit
