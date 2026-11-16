@@ -6,7 +6,7 @@ APP = str(Path(__file__).resolve().parents[1] / "app.py")
 
 
 def _slider(at, label_start):
-    return next(s for s in at.sidebar.slider if s.label.startswith(label_start))
+    return next(s for s in at.slider if s.label.startswith(label_start))
 
 
 def test_app_runs_without_exception():

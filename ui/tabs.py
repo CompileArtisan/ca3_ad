@@ -16,7 +16,7 @@ from ca3model.experiments import (_kind_spec, default_load_conditions, default_l
                                   run_trial_conditions)
 from ca3model.stats import paired_sweep_table, summarise
 
-from .sidebar import Settings
+from .settings import Settings
 from .text import ASSUMPTIONS, BIO_TABLE, DISCLAIMER, GLOSSARY, SHOW_NOT_SHOW
 
 LEVELS = [round(x, 1) for x in np.arange(0.0, 0.91, 0.1)]
@@ -88,7 +88,7 @@ def _stored(name: str, s: Settings):
     cur = json.loads(r["cfg"])
     now = json.loads(_cfg_json(s))
     if any(cur[k] != now[k] for k in ("net", "ret", "exp", "mode")):
-        st.warning("Showing results computed with earlier sidebar settings. Press Run to update.")
+        st.warning("Showing results computed with earlier model settings. Press Run to update.")
     return r["result"]
 
 
@@ -258,7 +258,7 @@ def render_learning(s: Settings) -> None:
         levels = st.multiselect("Damage levels", LEVELS, default=[0.0, 0.2, 0.4, 0.6, 0.8])
         seq_level = st.slider("Level for sequential-learning and plasticity analyses", 0.0, 0.9, 0.4, 0.1)
         go = st.form_submit_button("Run new-learning experiments (E)")
-    st.caption(f"Plasticity efficacy for damage-then-learn comes from the sidebar (currently "
+    st.caption(f"Plasticity efficacy for damage-then-learn comes from the model settings above (currently "
                f"{s.exp.plasticity_efficacy:.2f}); {s.exp.n_new_patterns} new patterns are learned.")
     if go:
         if not levels:
@@ -273,7 +273,7 @@ def render_learning(s: Settings) -> None:
     _chart(pl.fig_new_learning(summarise(E, ["condition", "pattern_group", "level"], ["success"])))
     st.info("In this abstraction effective weights are W_raw ⊙ efficacy ⊙ alive, so with plasticity efficacy = 1 "
             "'damage then learn' and 'learn then damage' coincide. They separate only when plasticity "
-            "efficacy < 1 (impaired encoding) — see the sidebar slider and the plot below.")
+            "efficacy < 1 (impaired encoding) — see the model settings above and the plot below.")
     a, b = st.columns(2)
     with a:
         st.subheader("Sequential learning")
@@ -330,7 +330,7 @@ def _summary_rows(cfg_json: str) -> pd.DataFrame:
 def render_summary(s: Settings) -> None:
     cfg = _cfg_json(s, syn=s.damage.synaptic_severity, neu=s.damage.neuron_loss)
     df = _summary_rows(cfg)
-    st.caption("All conditions at the current sidebar damage settings (paired over trials). "
+    st.caption("All conditions at the current damage settings (paired over trials). "
                "**success** uses surviving neurons; **success_all** counts lost neurons as errors.")
     summ = summarise(df, ["condition"], ["success", "success_all", "accuracy_surv", "accuracy_all", "sweeps"])
     order = ["healthy", "synaptic", "neuron", "combined"]

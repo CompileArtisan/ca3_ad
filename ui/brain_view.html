@@ -1,0 +1,316 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+:root{--bg:#0d0b1d;--card:#15122b;--line:#2a2650;--text:#ece9ff;--muted:#9a94c7;
+  --fire:#ffc94a;--silent:#7563e0;--unk:#5d5a80;--dead:#ff6b8a;--agree:#8fd3ff;--conflict:#ff6b8a;
+  --ok:#34d399;--bad:#fb7185;}
+*{box-sizing:border-box}
+html,body{margin:0;background:transparent;color:var(--text);
+  font-family:"Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;font-size:13px}
+.bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 10px}
+.btn{background:var(--card);border:1px solid var(--line);color:var(--text);border-radius:10px;
+  height:32px;min-width:38px;padding:0 10px;cursor:pointer;font-size:13px}
+.btn:hover{border-color:#5b4fd6}
+#scrub{flex:1;min-width:160px;accent-color:#a78bfa}
+#phase{min-width:150px;font-variant-numeric:tabular-nums;color:var(--muted)}
+#phase b{color:var(--text)}
+label.chk{color:var(--muted);display:flex;align-items:center;gap:6px;cursor:pointer}
+.legend{display:flex;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin:0 0 10px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.ln{width:16px;height:0;border-top:2px solid;display:inline-block}
+.layout{display:grid;grid-template-columns:150px 1fr 1fr;gap:12px}
+@media (max-width:900px){.layout{grid-template-columns:1fr}.mem{flex-direction:row!important;flex-wrap:wrap}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px}
+.mem{display:flex;flex-direction:column;gap:6px}
+.mem canvas{width:120px;height:120px;border-radius:8px}
+.lbl{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.note{font-size:11px;color:var(--muted);line-height:1.4}
+.head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.title{font-weight:600;font-size:14px}
+.badge{font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;border:1px solid var(--line);
+  color:var(--muted);white-space:nowrap}
+.badge.ok{color:var(--ok);border-color:rgba(52,211,153,.45);background:rgba(52,211,153,.08)}
+.badge.bad{color:var(--bad);border-color:rgba(251,113,133,.45);background:rgba(251,113,133,.08)}
+canvas.brain{width:100%;aspect-ratio:560/290;display:block}
+.bottom{display:grid;grid-template-columns:116px 1fr;gap:12px;align-items:start;margin-top:4px}
+.bottom canvas.grid{width:116px;height:116px;border-radius:8px}
+.big{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+.sub{color:var(--muted);font-size:11px;margin:2px 0 6px}
+canvas.spark{width:100%;height:46px;display:block}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.chip{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 8px}
+#tip{position:fixed;pointer-events:none;background:#0b0918;border:1px solid var(--line);border-radius:8px;
+  padding:5px 8px;font-size:12px;display:none;z-index:9}
+</style></head><body>
+<div class="bar">
+  <button class="btn" id="play" title="Play / pause">❚❚</button>
+  <button class="btn" id="restart" title="Replay from the cue">↺</button>
+  <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Timeline">
+  <span id="phase"></span>
+  <label class="chk"><input type="checkbox" id="err"> mark wrong neurons</label>
+</div>
+<div class="legend">
+  <span><i class="dot" style="background:var(--fire)"></i>firing (+1)</span>
+  <span><i class="dot" style="background:var(--silent)"></i>silent (−1)</span>
+  <span><i class="dot" style="border:1.5px solid var(--unk)"></i>not in cue yet</span>
+  <span><i class="dot" style="background:#2b2840;border:1px solid var(--dead)"></i>lost neuron</span>
+  <span><i class="ln" style="border-color:var(--agree)"></i>synapse agrees</span>
+  <span><i class="ln" style="border-color:var(--conflict)"></i>synapse conflicts</span>
+  <span><i class="ln" style="border-color:#6b5a7a;border-top-style:dotted"></i>synapse lost</span>
+</div>
+<div class="layout">
+  <div class="card mem">
+    <div><div class="lbl">Stored memory</div><canvas id="tgt" width="240" height="240"></canvas></div>
+    <div><div class="lbl">Cue shown</div><canvas id="cue" width="240" height="240"></canvas></div>
+    <div class="note" id="cuenote"></div>
+  </div>
+  <div id="cards" style="display:contents"></div>
+</div>
+<div id="tip"></div>
+<script>
+const D = __DATA__;
+const N = D.n, GH = D.grid[0], GW = D.grid[1];
+const COL = {fire:"#ffc94a", silent:"#7563e0", unk:"#5d5a80", dead:"#ff6b8a", agree:"143,211,255",
+             conflict:"255,107,138", ghost:"rgba(160,120,170,0.18)"};
+const CUE_T = 1.4, SWEEP_T = 1.5, HOLD_T = 3.0;
+const K = Math.max(...D.brains.map(b => b.sweeps));
+const TOTAL = CUE_T + K * SWEEP_T + HOLD_T;
+let t = 0, playing = true, last = performance.now(), hov = -1, showErr = false;
+
+// ---------- state at "sweep time" u in [0, K]
+function stateAt(b, u) {
+  if (u <= 0) return b.states[0];
+  const k = Math.floor(u), f = u - k;
+  if (k >= b.sweeps) return b.states[b.sweeps];
+  const a = b.states[k], c = b.states[k + 1], p = b.pos[k], s = new Array(N);
+  for (let i = 0; i < N; i++) s[i] = (p[i] !== null && p[i] <= f) ? c[i] : a[i];
+  return s;
+}
+function flipAge(b, u, i) {               // time since neuron i last flipped (sweep units)
+  const k = Math.floor(u);
+  for (let j = Math.min(k, b.sweeps - 1); j >= Math.max(0, k - 1); j--) {
+    if (b.states[j][i] !== b.states[j + 1][i] && b.pos[j][i] !== null) {
+      const at = j + b.pos[j][i];
+      if (at <= u) return u - at;
+    }
+  }
+  return Infinity;
+}
+function accuracy(b, s) {
+  let ok = 0; for (let i = 0; i < N; i++) if (b.alive[i] && s[i] === D.target[i]) ok++;
+  return b.nAlive ? ok / b.nAlive : 0;
+}
+D.brains.forEach(b => {                   // precompute accuracy curve for sparklines
+  b.nAlive = b.alive.reduce((x, y) => x + y, 0);
+  b.curve = []; const steps = 30;
+  for (let q = 0; q <= K * steps; q++) b.curve.push(accuracy(b, stateAt(b, q / steps)));
+});
+
+// ---------- canvases
+function setup(cv) {
+  const r = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== Math.round(w * r) || cv.height !== Math.round(h * r)) {
+    cv.width = Math.round(w * r); cv.height = Math.round(h * r);
+  }
+  const ctx = cv.getContext("2d"); ctx.setTransform(r, 0, 0, r, 0, 0); return [ctx, w, h];
+}
+function drawGrid(cv, s, b, opts = {}) {
+  const [ctx, w, h] = setup(cv), cw = w / GW, ch = h / GH;
+  ctx.fillStyle = "#0b0918"; ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < N; i++) {
+    const x = (i % GW) * cw, y = Math.floor(i / GW) * ch;
+    const dead = b && !b.alive[i];
+    ctx.fillStyle = dead ? "#1b1828" : s[i] > 0 ? COL.fire : s[i] < 0 ? COL.silent : "#2a2745";
+    ctx.fillRect(x + 0.5, y + 0.5, cw - 1, ch - 1);
+    if (dead) {
+      ctx.strokeStyle = "rgba(255,107,138,0.55)"; ctx.lineWidth = 1; ctx.beginPath();
+      ctx.moveTo(x + cw * .25, y + ch * .25); ctx.lineTo(x + cw * .75, y + ch * .75);
+      ctx.moveTo(x + cw * .75, y + ch * .25); ctx.lineTo(x + cw * .25, y + ch * .75); ctx.stroke();
+    } else if (opts.err && b && s[i] !== D.target[i]) {
+      ctx.strokeStyle = "#ff3d6e"; ctx.lineWidth = 1.6; ctx.strokeRect(x + 1.2, y + 1.2, cw - 2.4, ch - 2.4);
+    }
+    if (i === hov) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.strokeRect(x + .5, y + .5, cw - 1, ch - 1); }
+  }
+}
+
+// brain silhouette (side view, front to the left), in brain units
+const LOBES = [[0.70,0.42,0.58,0.36],[0.30,0.50,0.26,0.28],[0.66,0.64,0.34,0.17],
+               [1.10,0.48,0.24,0.26],[1.06,0.78,0.20,0.12],[0.86,0.90,0.07,0.14]];
+const SULCI = [[.22,.38,.32,.40,.42,.24],[.48,.14,.62,.26,.60,.46],[.80,.10,.70,.25,.78,.40],
+               [.95,.20,1.0,.36,1.18,.34],[.40,.56,.70,.44,.98,.52],[.18,.62,.24,.74,.40,.70],
+               [.92,.76,1.06,.70,1.22,.75],[.93,.82,1.06,.78,1.22,.82],[.30,.18,.38,.30,.30,.42],
+               [1.05,.15,1.08,.30,1.25,.42]];
+function lobePath(ctx) { ctx.beginPath(); for (const [x,y,rx,ry] of LOBES) { ctx.moveTo(x+rx,y); ctx.ellipse(x,y,rx,ry,0,0,Math.PI*2); } }
+function drawBrain(ctx, b, acc, accent) {
+  const S = 148 * b.atrophy, ox = 18 + (1 - b.atrophy) * 100, oy = 64 + (1 - b.atrophy) * 70;
+  ctx.save(); ctx.translate(ox, oy); ctx.scale(S, S);
+  ctx.lineWidth = 4 / S; ctx.strokeStyle = "#3b3470"; lobePath(ctx); ctx.stroke();
+  const g = ctx.createLinearGradient(0, 0, 1.3, 1);
+  g.addColorStop(0, "#2a2350"); g.addColorStop(1, "#1a1636");
+  ctx.fillStyle = g; lobePath(ctx); ctx.fill();
+  ctx.save(); lobePath(ctx); ctx.clip();
+  ctx.strokeStyle = "rgba(200,190,255,0.10)"; ctx.lineWidth = 2.2 / S; ctx.lineCap = "round";
+  for (const [a,b2,c,d,e,f] of SULCI) { ctx.beginPath(); ctx.moveTo(a,b2); ctx.quadraticCurveTo(c,d,e,f); ctx.stroke(); }
+  ctx.restore();
+  // hippocampus: glows with how much of the memory is currently recovered
+  const m = Math.max(0, Math.min(1, (acc - 0.5) / 0.5));
+  ctx.lineCap = "round";
+  ctx.strokeStyle = `rgba(${accent},${0.15 + 0.35 * m})`; ctx.lineWidth = 16 / S;
+  ctx.beginPath(); ctx.moveTo(.58,.63); ctx.quadraticCurveTo(.72,.73,.88,.60); ctx.stroke();
+  ctx.strokeStyle = `rgba(255,201,74,${0.35 + 0.65 * m})`; ctx.lineWidth = 5 / S;
+  ctx.beginPath(); ctx.moveTo(.58,.63); ctx.quadraticCurveTo(.72,.73,.88,.60); ctx.stroke();
+  ctx.restore();
+  return [ox + .73 * S, oy + .66 * S];
+}
+const DISC = {x: 410, y: 145, r: 132};
+function nodeXY(i) { return [DISC.x + D.xy[i][0] * DISC.r, DISC.y + D.xy[i][1] * DISC.r]; }
+function drawCard(card, u) {
+  const b = card.b, s = stateAt(b, u), acc = accuracy(b, s);
+  const [ctx, w, h] = setup(card.cv), sc = w / 560;
+  ctx.clearRect(0, 0, w, h); ctx.save(); ctx.scale(sc, sc);
+  const [hx, hy] = drawBrain(ctx, b, acc, b.accentRGB);
+  // zoom callout from the hippocampus to the CA3 disc
+  ctx.strokeStyle = `rgba(${b.accentRGB},0.35)`; ctx.setLineDash([3, 4]); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(DISC.x - DISC.r * .72, DISC.y - DISC.r * .69);
+  ctx.moveTo(hx, hy); ctx.lineTo(DISC.x - DISC.r * .72, DISC.y + DISC.r * .69); ctx.stroke(); ctx.setLineDash([]);
+  ctx.beginPath(); ctx.arc(hx, hy, 4, 0, Math.PI * 2); ctx.fillStyle = `rgb(${b.accentRGB})`; ctx.fill();
+  ctx.fillStyle = "#9a94c7"; ctx.font = "11px Inter, system-ui, sans-serif";
+  ctx.fillText("hippocampus", hx - 34, hy + 22);
+  ctx.textAlign = "center"; ctx.fillText("CA3 network · " + N + " model neurons", DISC.x, DISC.y + DISC.r + 14);
+  ctx.textAlign = "left";
+  // disc background
+  const rg = ctx.createRadialGradient(DISC.x, DISC.y, 10, DISC.x, DISC.y, DISC.r + 10);
+  rg.addColorStop(0, "rgba(60,50,120,0.35)"); rg.addColorStop(1, "rgba(20,16,40,0.0)");
+  ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(DISC.x, DISC.y, DISC.r + 10, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = `rgba(${b.accentRGB},0.25)`; ctx.lineWidth = 1; ctx.stroke();
+  // synapses
+  const E = D.edges;
+  ctx.setLineDash([2, 3]); ctx.strokeStyle = COL.ghost; ctx.lineWidth = 1; ctx.beginPath();
+  for (let e = 0; e < E.length; e++) {
+    const [a, c] = E[e]; if (b.eff[e] > 0 || !b.alive[a] || !b.alive[c]) continue;
+    const [x1, y1] = nodeXY(a), [x2, y2] = nodeXY(c); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+  }
+  ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1.5;
+  for (let e = 0; e < E.length; e++) {
+    const [a, c] = E[e], eff = b.eff[e];
+    if (eff <= 0 || !b.alive[a] || !b.alive[c]) continue;
+    const ag = D.wsign[e] * s[a] * s[c];
+    const al = (0.12 + 0.55 * eff) * (ag === 0 ? 0.35 : 1);
+    ctx.strokeStyle = ag > 0 ? `rgba(${COL.agree},${al})` : ag < 0 ? `rgba(${COL.conflict},${al})` : `rgba(140,130,190,${al})`;
+    const [x1, y1] = nodeXY(a), [x2, y2] = nodeXY(c);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+  // neurons
+  const rad = Math.max(2.2, DISC.r * Math.sqrt(Math.PI / N) * 0.25);
+  for (let i = 0; i < N; i++) {
+    const [x, y] = nodeXY(i);
+    if (!b.alive[i]) {
+      ctx.fillStyle = "#231f36"; ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "rgba(255,107,138,0.6)"; ctx.lineWidth = 1; ctx.beginPath();
+      ctx.moveTo(x - rad * .6, y - rad * .6); ctx.lineTo(x + rad * .6, y + rad * .6);
+      ctx.moveTo(x + rad * .6, y - rad * .6); ctx.lineTo(x - rad * .6, y + rad * .6); ctx.stroke();
+      continue;
+    }
+    const age = flipAge(b, u, i);
+    if (age < 0.6) {
+      const p = age / 0.6; ctx.strokeStyle = s[i] > 0 ? `rgba(255,201,74,${1 - p})` : `rgba(160,140,255,${1 - p})`;
+      ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, rad + 2 + p * 9, 0, Math.PI * 2); ctx.stroke();
+    }
+    if (s[i] === 0) { ctx.strokeStyle = COL.unk; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(x, y, rad - .6, 0, Math.PI * 2); ctx.stroke(); }
+    else {
+      if (s[i] > 0) { ctx.fillStyle = "rgba(255,201,74,0.18)"; ctx.beginPath(); ctx.arc(x, y, rad * 1.7, 0, Math.PI * 2); ctx.fill(); }
+      ctx.fillStyle = s[i] > 0 ? COL.fire : COL.silent; ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill();
+    }
+    if (showErr && s[i] !== D.target[i]) { ctx.strokeStyle = "#ff3d6e"; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.arc(x, y, rad + 1.6, 0, Math.PI * 2); ctx.stroke(); }
+    if (i === hov) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, rad + 3, 0, Math.PI * 2); ctx.stroke(); }
+  }
+  ctx.restore();
+  // bottom row
+  drawGrid(card.grid, s, b, {err: showErr});
+  card.big.textContent = (acc * 100).toFixed(1) + "%";
+  const settled = u >= b.sweeps && u > 0;
+  card.badge.className = "badge" + (settled ? (b.success ? " ok" : " bad") : "");
+  card.badge.textContent = u <= 0 ? "Cue presented" : !settled ? "Recalling…" : b.success ? "✓ Memory recalled" : "✗ Recall failed";
+  card.verdict.textContent = settled ? b.verdict : "of surviving neurons match the stored memory";
+  drawSpark(card, u);
+}
+function drawSpark(card, u) {
+  const b = card.b, [ctx, w, h] = setup(card.spark), cv = b.curve, n = cv.length - 1;
+  ctx.clearRect(0, 0, w, h);
+  const X = q => 2 + (w - 4) * q / Math.max(1, n), Y = a => h - 4 - (h - 8) * Math.max(0, (a - 0.4) / 0.6);
+  ctx.strokeStyle = "rgba(255,255,255,0.18)"; ctx.setLineDash([3, 3]); ctx.beginPath();
+  ctx.moveTo(0, Y(D.thr)); ctx.lineTo(w, Y(D.thr)); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle = "#6f6a99"; ctx.font = "10px Inter, system-ui"; ctx.fillText("success " + Math.round(D.thr * 100) + "%", 4, Y(D.thr) - 3);
+  ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.lineWidth = 1.5; ctx.beginPath();
+  cv.forEach((a, q) => q ? ctx.lineTo(X(q), Y(a)) : ctx.moveTo(X(q), Y(a))); ctx.stroke();
+  const upto = Math.min(n, Math.round(Math.max(0, u) / K * n));
+  ctx.strokeStyle = `rgb(${b.accentRGB})`; ctx.lineWidth = 2; ctx.beginPath();
+  for (let q = 0; q <= upto; q++) q ? ctx.lineTo(X(q), Y(cv[q])) : ctx.moveTo(X(q), Y(cv[q]));
+  ctx.stroke();
+  ctx.fillStyle = `rgb(${b.accentRGB})`; ctx.beginPath(); ctx.arc(X(upto), Y(cv[upto]), 3, 0, Math.PI * 2); ctx.fill();
+}
+
+// ---------- build cards
+const cards = D.brains.map((b, idx) => {
+  const el = document.createElement("div"); el.className = "card";
+  el.innerHTML = `<div class="head"><div class="title">${b.title}</div><div class="badge">…</div></div>
+    <canvas class="brain"></canvas>
+    <div class="bottom"><div><div class="lbl">What it recalls</div><canvas class="grid"></canvas></div>
+      <div><div class="big">–</div><div class="sub verdict"></div><canvas class="spark"></canvas>
+      <div class="chips">${b.chips.map(c => `<span class="chip">${c}</span>`).join("")}</div></div></div>`;
+  document.getElementById("cards").appendChild(el);
+  const card = {b, el, cv: el.querySelector("canvas.brain"), grid: el.querySelector("canvas.grid"),
+    spark: el.querySelector("canvas.spark"), big: el.querySelector(".big"), badge: el.querySelector(".badge"),
+    verdict: el.querySelector(".verdict")};
+  card.cv.addEventListener("mousemove", ev => {
+    const r = card.cv.getBoundingClientRect(), sc = r.width / 560;
+    const mx = (ev.clientX - r.left) / sc, my = (ev.clientY - r.top) / sc;
+    let best = -1, bd = 1e9;
+    for (let i = 0; i < N; i++) { const [x, y] = nodeXY(i), d = (x - mx) ** 2 + (y - my) ** 2; if (d < bd) { bd = d; best = i; } }
+    setHover(bd < 100 ? best : -1, ev, card);
+  });
+  card.grid.addEventListener("mousemove", ev => {
+    const r = card.grid.getBoundingClientRect();
+    const i = Math.floor((ev.clientY - r.top) / r.height * GH) * GW + Math.floor((ev.clientX - r.left) / r.width * GW);
+    setHover(i >= 0 && i < N ? i : -1, ev, card);
+  });
+  [card.cv, card.grid].forEach(c => c.addEventListener("mouseleave", () => setHover(-1)));
+  return card;
+});
+const tip = document.getElementById("tip");
+const word = v => v > 0 ? "firing" : v < 0 ? "silent" : "unknown";
+function setHover(i, ev, card) {
+  hov = i;
+  if (i < 0 || !ev) { tip.style.display = "none"; return; }
+  const b = card.b, s = stateAt(b, uNow());
+  tip.innerHTML = !b.alive[i] ? `neuron ${i}: <b>lost</b>` :
+    `neuron ${i}: <b>${word(s[i])}</b> · memory says ${word(D.target[i])} ${s[i] === D.target[i] ? "✓" : "✗"}`;
+  tip.style.display = "block"; tip.style.left = (ev.clientX + 12) + "px"; tip.style.top = (ev.clientY + 12) + "px";
+}
+drawGrid(document.getElementById("tgt"), D.target, null);
+drawGrid(document.getElementById("cue"), D.brains[0].states[0], null);
+document.getElementById("cuenote").innerHTML = D.cueNote;
+
+// ---------- clock
+const uNow = () => Math.max(0, Math.min(K, (t - CUE_T) / SWEEP_T));
+function phase() {
+  const u = uNow(), el = document.getElementById("phase");
+  if (t < CUE_T) el.innerHTML = "<b>Cue presented</b>";
+  else if (u < K) el.innerHTML = `<b>Sweep ${Math.floor(u) + 1}</b> of ${K} · neurons updating`;
+  else el.innerHTML = "<b>Settled</b> · network has stopped changing";
+}
+function frame(now) {
+  const dt = (now - last) / 1000; last = now;
+  if (playing) { t += dt; if (t > TOTAL) t = 0; document.getElementById("scrub").value = Math.round(t / TOTAL * 1000); }
+  const u = t < CUE_T ? 0 : uNow();
+  cards.forEach(c => drawCard(c, u)); phase();
+  requestAnimationFrame(frame);
+}
+const playBtn = document.getElementById("play");
+playBtn.onclick = () => { playing = !playing; playBtn.textContent = playing ? "❚❚" : "▶"; };
+document.getElementById("restart").onclick = () => { t = 0; playing = true; playBtn.textContent = "❚❚"; };
+document.getElementById("scrub").oninput = e => { t = e.target.value / 1000 * TOTAL; playing = false; playBtn.textContent = "▶"; };
+document.getElementById("err").onchange = e => { showErr = e.target.checked; };
+requestAnimationFrame(frame);
+</script></body></html>
