@@ -13,8 +13,9 @@ import streamlit as st
 
 from ca3model.neurolab import (DONEPEZIL_RECOVERY, GRID, MEMANTINE_NOISE_REDUCTION,
                                NEURON_LOSS_AT_MAX, SIMULATOR_MODE, SYNAPSE_LOSS_AT_MAX,
-                               covariance_weights,
-                               cue_counts, neuron_layout, recall_reliability, run_stimulator)
+                               connectivity_for_severity, covariance_weights,
+                               cue_counts, memory_pattern,
+                               severity_for_connectivity, neuron_layout, recall_reliability, run_stimulator)
 
 from .settings import Settings
 
@@ -42,9 +43,14 @@ def _verdict(m: dict) -> str:
 
 @st.cache_data(show_spinner=False, max_entries=64)
 def _simulate(args: tuple) -> tuple[str, dict, dict]:
-    sev, noise, strength, _, *rest = args
+    sev, noise, strength, _, mode, sweeps, thr, seed, _conn = args
     return (_payload(run_stimulator(*args), args), recall_reliability(*args),
-            recall_reliability(0.0, noise, strength, False, *rest))
+            recall_reliability(0.0, noise, strength, False, mode, sweeps, thr, seed))
+
+
+def _weight_matrix(W: np.ndarray, scale: float) -> list:
+    """25x25 weights scaled to [-1, 1] by the strongest healthy synapse, 2 decimals."""
+    return np.round(np.clip(W / scale, -1, 1), 2).tolist()
 
 
 def _round(a, nd=3):
@@ -59,6 +65,8 @@ def _payload(r: dict, args: tuple) -> str:
     xy, edges = neuron_layout(n)
     wsign = np.sign(covariance_weights(r["target"])[edges[:, 0], edges[:, 1]]).astype(int)
     eff = brain.efficacy[edges[:, 0], edges[:, 1]]
+    W_healthy = covariance_weights(memory_pattern())
+    w_max = float(np.abs(W_healthy).max())
     title = "Healthy brain" if sev == 0 else f"Alzheimer's-inspired brain · {sev:.0%} severity"
     if done:
         title += " · donepezil"
@@ -79,6 +87,10 @@ def _payload(r: dict, args: tuple) -> str:
             "atrophy": 1.0 - 0.22 * sev,
         }],
         "cueNote": _cue_note(strength, noise),
+        "weights": {"healthy": _weight_matrix(W_healthy, w_max),
+                    "brain": _weight_matrix(b.weights, w_max),
+                    "brainLabel": "This brain" + (" + donepezil" if done else ""),
+                    "brainSub": f"{100 * brain.synaptic_strength():.0f}% synaptic strength left"},
     }
     return TEMPLATE.replace("__DATA__", json.dumps(data, separators=(",", ":")))
 
@@ -113,16 +125,33 @@ def _on_memantine() -> None:
             ss["nl_noise"] = min(NOISE_MAX, int(round(ss["nl_noise"] / (1 - MEMANTINE_NOISE_REDUCTION))))
 
 
-def _controls() -> tuple[float, float, float, bool, bool]:
+def _on_severity() -> None:
+    st.session_state["nl_conn"] = connectivity_for_severity(st.session_state["nl_sev"])
+
+
+def _on_connectivity() -> None:
+    st.session_state["nl_sev"] = severity_for_connectivity(st.session_state["nl_conn"])
+
+
+def _controls() -> tuple[float, float, float, float, bool, bool]:
     ss = st.session_state
     ss.setdefault("nl_noise", 10)
+    ss.setdefault("nl_sev", 65)
+    ss.setdefault("nl_conn", connectivity_for_severity(ss["nl_sev"]))
+    lo_conn = connectivity_for_severity(100)
     with st.container(border=True, key="nl_controls"):
-        c1, c2, c3, c4 = st.columns([1.15, 1, 1, 1.05], gap="large")
-        sev = c1.slider("Alzheimer's severity", 0, 100, 65, 5, format="%d%%", key="nl_sev",
-                        help="0% is a healthy brain. Higher severity removes synaptic strength "
-                             f"(up to {SYNAPSE_LOSS_AT_MAX:.0%} at 100%) and a few neurons (up to "
-                             f"{NEURON_LOSS_AT_MAX:.0%}). It is the same brain getting worse: "
-                             "damage at a higher setting includes all the damage below it.") / 100
+        c1, c0, c2, c3, c4 = st.columns([1.1, 1.1, 1, 1, 1.05], gap="medium")
+        sev = c1.slider("Alzheimer's severity", 0, 100, step=1, format="%d%%", key="nl_sev",
+                        on_change=_on_severity,
+                        help="0% is a healthy brain. Higher severity lowers synaptic connectivity "
+                             f"(down to {1 - SYNAPSE_LOSS_AT_MAX:.0%} at 100%) and removes a few "
+                             f"neurons (up to {NEURON_LOSS_AT_MAX:.0%}). It is the same brain getting "
+                             "worse: damage at a higher setting includes all the damage below it.") / 100
+        conn = c0.slider("Synaptic connectivity (wᵢⱼ)", lo_conn, 100, step=1, format="%d%%",
+                         key="nl_conn", on_change=_on_connectivity,
+                         help="Share of healthy synaptic strength kept (every synapse is weakened "
+                              "by a random amount). Linked to severity: moving one moves the "
+                              "other.") / 100
         noise = c2.slider("Input noise", 0, NOISE_MAX, step=1, format="%d%%", key="nl_noise",
                           help="Share of the neurons outside the X that fire by mistake in the cue. "
                                "Memantine halves it.") / 100
@@ -140,7 +169,7 @@ def _controls() -> tuple[float, float, float, bool, bool]:
                             help=f"NMDA antagonist, modelled as cutting input noise by "
                                  f"{MEMANTINE_NOISE_REDUCTION:.0%}. Turning it on moves the "
                                  "Input noise slider down; turning it off moves it back.")
-    return sev, noise, strength, done, mem
+    return sev, conn, noise, strength, done, mem
 
 
 def _reliability(rel: dict, healthy: dict, sev: float) -> None:
@@ -155,9 +184,9 @@ def _reliability(rel: dict, healthy: dict, sev: float) -> None:
 
 
 def render_neurolab(s: Settings) -> None:
-    sev, noise, strength, done, _ = _controls()
+    sev, conn, noise, strength, done, _ = _controls()
     args = (sev, noise, strength, done, SIMULATOR_MODE, s.ret.max_sweeps,
-            s.ret.success_threshold, s.exp.base_seed)
+            s.ret.success_threshold, s.exp.base_seed, conn)
     with st.spinner("Running the brain…"):
         html, rel, healthy = _simulate(args)
     st.iframe(html, height="content")
@@ -181,6 +210,10 @@ def render_neurolab(s: Settings) -> None:
             "- The grid under the brain is the same neurons laid out as the 5×5 image. Recall counts "
             f"as successful when the network settles and at least {s.ret.success_threshold:.0%} of "
             "all 25 neurons match the X (a lost neuron cannot fire, so it counts as silent).\n"
+            "- **Synaptic weights wᵢⱼ**: the heatmaps show all 25×25 connection strengths, scaled so "
+            "+1 is the strongest healthy synapse. Yellow = excitatory (the two neurons are both in "
+            "the X, or both outside it), purple = inhibitory (one in, one out), 0 = no effect. "
+            "Damage pulls every value toward 0; lost neurons leave blank rows and columns.\n"
             "- Sweeps, success threshold and the random seed are in **Advanced**.")
         st.caption("Drug toggles are illustrative abstractions, not pharmacology, and have no "
                    "clinical meaning.")

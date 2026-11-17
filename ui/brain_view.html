@@ -40,6 +40,24 @@ canvas.brain{width:100%;aspect-ratio:560/290;display:block}
 canvas.spark{width:100%;height:46px;display:block}
 .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 .chip{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 8px}
+/* synaptic weight heatmaps */
+.wcard{grid-column:2}
+@media (max-width:900px){.wcard{grid-column:1}}
+.wrow{display:grid;grid-template-columns:repeat(2,minmax(0,250px)) auto;gap:22px;align-items:start;
+  justify-content:center;margin-top:8px}
+.wfig{display:flex;flex-direction:column;align-items:center;gap:6px}
+.wfig canvas{width:100%;aspect-ratio:1;border-radius:6px;display:block;image-rendering:pixelated}
+.wcap{text-align:center;border:1px solid var(--line);border-radius:10px;padding:4px 12px;font-size:12px}
+.wcap b{display:block;font-size:13px}.wcap span{color:var(--muted);font-size:11px}
+.wcap.h{border-color:rgba(52,211,153,.45)}.wcap.d{border-color:rgba(251,113,133,.45)}
+.cbar{display:grid;grid-template-columns:14px auto;grid-template-rows:auto 1fr;column-gap:8px;
+  height:250px}
+.cbar .ttl{grid-column:1/-1;font-weight:600;margin-bottom:6px}
+.cbar canvas{width:14px;height:100%;border-radius:3px;display:block}
+.cbar .ticks{position:relative;font-size:12px;font-variant-numeric:tabular-nums}
+.cbar .ticks span{position:absolute;left:0;transform:translateY(-50%);white-space:nowrap}
+.cbar .ticks span::before{content:"";display:inline-block;width:5px;border-top:1px solid var(--muted);
+  vertical-align:middle;margin-right:4px}
 #tip{position:fixed;pointer-events:none;background:#0b0918;border:1px solid var(--line);border-radius:8px;
   padding:5px 8px;font-size:12px;display:none;z-index:9}
 </style></head><body>
@@ -67,6 +85,21 @@ canvas.spark{width:100%;height:46px;display:block}
     <div class="note" id="cuenote"></div>
   </div>
   <div id="cards" style="display:contents"></div>
+  <div class="card wcard">
+    <div class="head"><div class="title">Synaptic weights w<sub>ij</sub> · healthy vs this brain</div></div>
+    <div class="note">Every connection between the 25 neurons (row = neuron i, column = neuron j), scaled so
+      +1 is the strongest healthy synapse. Damage pulls weights toward 0; lost neurons leave blank rows and
+      columns. Hover a cell to read it.</div>
+    <div class="wrow">
+      <div class="wfig"><canvas id="wh" width="250" height="250"></canvas>
+        <div class="wcap h"><b>Healthy</b><span>intact weights</span></div></div>
+      <div class="wfig"><canvas id="wb" width="250" height="250"></canvas>
+        <div class="wcap d"><b id="wbl"></b><span id="wbs"></span></div></div>
+      <div class="cbar"><div class="ttl">w<sub>ij</sub></div><canvas id="cbar" width="14" height="240"></canvas>
+        <div class="ticks"><span style="top:0%">+1.0</span><span style="top:25%">+0.5</span>
+          <span style="top:50%">0</span><span style="top:75%">−0.5</span><span style="top:100%">−1.0</span></div></div>
+    </div>
+  </div>
 </div>
 <div id="tip"></div>
 <script>
@@ -291,6 +324,52 @@ function setHover(i, ev, card) {
     `neuron ${i}: <b>${word(s[i])}</b> · memory says ${word(D.target[i])} ${s[i] === D.target[i] ? "✓" : "✗"}`;
   tip.style.display = "block"; tip.style.left = (ev.clientX + 12) + "px"; tip.style.top = (ev.clientY + 12) + "px";
 }
+// ---------- synaptic weight heatmaps (scale −1 … +1)
+const CMAP = [[-1, [26, 11, 61]], [-0.5, [92, 26, 138]], [0, [183, 54, 143]], [0.5, [240, 121, 74]], [1, [255, 225, 74]]];
+function wcolor(v) {
+  v = Math.max(-1, Math.min(1, v));
+  for (let k = 1; k < CMAP.length; k++) {
+    const [a, ca] = CMAP[k - 1], [b, cb] = CMAP[k];
+    if (v <= b) { const f = (v - a) / (b - a); return `rgb(${ca.map((c, j) => Math.round(c + f * (cb[j] - c))).join(",")})`; }
+  }
+  return "rgb(255,225,74)";
+}
+function drawWeights(cv, M, alive) {
+  const [ctx, w, h] = setup(cv), c = w / N;
+  ctx.fillStyle = "#0b0918"; ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    if (alive && (!alive[i] || !alive[j])) continue;          // lost neuron: blank row/column
+    ctx.fillStyle = i === j ? "#0b0918" : wcolor(M[i][j]);   // no self-connections
+    ctx.fillRect(j * c, i * c, Math.ceil(c), Math.ceil(c));
+  }
+}
+function drawCbar() {
+  const [ctx, w, h] = setup(document.getElementById("cbar"));
+  for (let y = 0; y < h; y++) { ctx.fillStyle = wcolor(1 - 2 * y / (h - 1)); ctx.fillRect(0, y, w, 1); }
+}
+const WH = document.getElementById("wh"), WB = document.getElementById("wb");
+document.getElementById("wbl").textContent = D.weights.brainLabel;
+document.getElementById("wbs").textContent = D.weights.brainSub;
+function drawAllWeights() {
+  drawWeights(WH, D.weights.healthy, null);
+  drawWeights(WB, D.weights.brain, D.brains[0].alive);
+  drawCbar();
+}
+[[WH, D.weights.healthy, null], [WB, D.weights.brain, D.brains[0].alive]].forEach(([cv, M, alive]) => {
+  cv.addEventListener("mousemove", ev => {
+    const r = cv.getBoundingClientRect();
+    const i = Math.floor((ev.clientY - r.top) / r.height * N), j = Math.floor((ev.clientX - r.left) / r.width * N);
+    if (i < 0 || j < 0 || i >= N || j >= N) { tip.style.display = "none"; return; }
+    const lost = alive && (!alive[i] || !alive[j]);
+    const v = M[i][j];
+    tip.innerHTML = i === j ? `neuron ${i}: no self-connection` : lost ? `w<sub>${i},${j}</sub>: neuron lost` :
+      `w<sub>${i},${j}</sub> = <b>${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}</b>`;
+    tip.style.display = "block"; tip.style.left = (ev.clientX + 12) + "px"; tip.style.top = (ev.clientY + 12) + "px";
+  });
+  cv.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+});
+drawAllWeights();
+window.addEventListener("resize", drawAllWeights);
 drawGrid(document.getElementById("tgt"), D.target, null);
 drawGrid(document.getElementById("cue"), D.brains[0].states[0], null, {stray: true});
 document.getElementById("cuenote").innerHTML = D.cueNote;

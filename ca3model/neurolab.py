@@ -131,6 +131,16 @@ def covariance_weights(pattern: np.ndarray) -> np.ndarray:
     return W
 
 
+def connectivity_for_severity(severity_pct: int) -> int:
+    """Slider link: severity % -> synaptic connectivity % (rounded half up)."""
+    return _half_up(round(100.0 * severity_damage(severity_pct / 100.0)[0], 6))
+
+
+def severity_for_connectivity(connectivity_pct: int) -> int:
+    """Slider link: synaptic connectivity % -> the severity % that implies it."""
+    return int(np.clip(_half_up((100.0 - connectivity_pct) / SYNAPSE_LOSS_AT_MAX), 0, 100))
+
+
 def firing_threshold(pattern: np.ndarray) -> float:
     a = float((pattern > 0).mean())
     return THRESHOLD_SYNAPSES * (1.0 - a) ** 2 / pattern.size
@@ -160,9 +170,13 @@ class Brain:
 
 
 def make_brain(severity: float, donepezil: bool = False, mode: str = SIMULATOR_MODE,
-               base_seed: int = 12345) -> Brain:
+               base_seed: int = 12345, connectivity: float | None = None) -> Brain:
+    """``connectivity`` (mean synaptic efficacy kept) overrides the one implied by severity;
+    severity still sets neuron loss."""
     pattern = memory_pattern()
     conn, loss = severity_damage(severity)
+    if connectivity is not None:
+        conn = float(np.clip(connectivity, 0.0, 1.0))
     draw = draw_damage_randomness(N_NEURONS, trial_rngs(base_seed, 0).damage)
     E = connectivity_efficacy(draw.U, conn, mode)
     if donepezil:
@@ -245,10 +259,10 @@ def _orders(alive: np.ndarray, max_sweeps: int, seed) -> np.ndarray:
 
 def run_stimulator(severity: float, noise: float, strength: float, donepezil: bool = False,
                    mode: str = SIMULATOR_MODE, max_sweeps: int = 30, threshold: float = 0.95,
-                   base_seed: int = 12345) -> dict:
+                   base_seed: int = 12345, connectivity: float | None = None) -> dict:
     """One brain at ``severity`` recalling the X from one cue."""
     target = memory_pattern()
-    brain = make_brain(severity, donepezil, mode, base_seed)
+    brain = make_brain(severity, donepezil, mode, base_seed, connectivity)
     W = brain.effective_weights()
     cue = build_cue(target, strength, noise, (base_seed * 7919) & 0xFFFFFFFF)
     orders = _orders(brain.alive, max_sweeps, [base_seed & 0xFFFFFFFF, 0])
@@ -267,11 +281,12 @@ def run_stimulator(severity: float, noise: float, strength: float, donepezil: bo
 
 def recall_reliability(severity: float, noise: float, strength: float, donepezil: bool = False,
                        mode: str = SIMULATOR_MODE, max_sweeps: int = 30, threshold: float = 0.95,
-                       base_seed: int = 12345, n_cues: int = 40) -> dict:
+                       base_seed: int = 12345, connectivity: float | None = None,
+                       n_cues: int = 40) -> dict:
     """Successes over ``n_cues`` fresh cues (different neurons lit) for the same brain as
     :func:`run_stimulator`. Shows whether the single animated run is typical."""
     target = memory_pattern()
-    brain = make_brain(severity, donepezil, mode, base_seed)
+    brain = make_brain(severity, donepezil, mode, base_seed, connectivity)
     W = brain.effective_weights()
     ok = 0
     for k in range(n_cues):

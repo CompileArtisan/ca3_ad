@@ -33,10 +33,10 @@ def test_every_heavy_suite_runs_from_the_ui():
         assert key in at.session_state
 
 
-def test_one_brain_with_severity_slider_and_renamed_title():
+def test_one_brain_with_severity_and_connectivity_sliders_and_renamed_title():
     at = AppTest.from_file(APP, default_timeout=120).run()
     assert _slider(at, "Alzheimer's severity").value == 65
-    assert not any(s.label.startswith("Synaptic connectivity") for s in at.slider)
+    assert any(s.label.startswith("Synaptic connectivity") for s in at.slider)
     assert any("RECALL4" in h.body for h in at.html if hasattr(h, "body"))
 
 
@@ -49,3 +49,13 @@ def test_memantine_moves_input_noise_down_and_back():
     assert not at.exception
     next(t for t in at.toggle if t.label == "Memantine").set_value(False).run()
     assert _slider(at, "Input noise").value == 20
+
+
+def test_connectivity_and_severity_sliders_are_linked():
+    at = AppTest.from_file(APP, default_timeout=120).run()
+    assert _slider(at, "Synaptic connectivity").value == 42      # 65% severity -> 100 - 0.9*65
+    _slider(at, "Alzheimer's severity").set_value(0).run()
+    assert _slider(at, "Synaptic connectivity").value == 100
+    _slider(at, "Synaptic connectivity").set_value(55).run()
+    assert _slider(at, "Alzheimer's severity").value == 50
+    assert not at.exception

@@ -99,3 +99,13 @@ def test_layout_edges_valid():
     xy, edges = neuron_layout(N_NEURONS)
     assert xy.shape == (N_NEURONS, 2) and np.all(np.hypot(*xy.T) <= 1.0)
     assert np.all(edges[:, 0] < edges[:, 1]) and edges.max() < N_NEURONS
+
+
+def test_connectivity_override_sets_mean_synaptic_efficacy():
+    from ca3model.neurolab import connectivity_for_severity, severity_for_connectivity
+    off = ~np.eye(N_NEURONS, dtype=bool)
+    for c in (1.0, 0.8, 0.4):
+        assert make_brain(0.5, connectivity=c).efficacy[off].mean() == pytest.approx(c, abs=0.08)
+    assert make_brain(0.3).efficacy[off].mean() == pytest.approx(severity_damage(0.3)[0], abs=0.08)
+    for sev in range(0, 101, 5):
+        assert severity_for_connectivity(connectivity_for_severity(sev)) == pytest.approx(sev, abs=1)
