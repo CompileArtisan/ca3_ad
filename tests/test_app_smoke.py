@@ -31,3 +31,21 @@ def test_every_heavy_suite_runs_from_the_ui():
         assert not at.exception, (label, at.exception)
     for key in ("res_sweeps", "res_combined", "res_learning", "res_load"):
         assert key in at.session_state
+
+
+def test_one_brain_with_severity_slider_and_renamed_title():
+    at = AppTest.from_file(APP, default_timeout=120).run()
+    assert _slider(at, "Alzheimer's severity").value == 65
+    assert not any(s.label.startswith("Synaptic connectivity") for s in at.slider)
+    assert any("RECALL4" in h.body for h in at.html if hasattr(h, "body"))
+
+
+def test_memantine_moves_input_noise_down_and_back():
+    at = AppTest.from_file(APP, default_timeout=120).run()
+    _slider(at, "Input noise").set_value(20).run()
+    mem = next(t for t in at.toggle if t.label == "Memantine")
+    mem.set_value(True).run()
+    assert _slider(at, "Input noise").value == 10
+    assert not at.exception
+    next(t for t in at.toggle if t.label == "Memantine").set_value(False).run()
+    assert _slider(at, "Input noise").value == 20

@@ -1,18 +1,40 @@
 #!/usr/bin/env python3
 
-"""Neurolab core: one cue shown to a healthy and a damaged network side by side.
+"""RECALL4 NEUROLAB core: one brain, one stored memory (an X on a 5x5 grid), one severity knob.
 
-Illustrative abstraction. Drug toggles are NOT pharmacological models:
-  donepezil -> recovers a fraction of lost synaptic efficacy on surviving neurons
-  memantine -> reduces the effective input noise reaching the network
+Why this is not the classic Hopfield model used by the analysis tabs
+--------------------------------------------------------------------
+The analysis tabs use zero-threshold sign dynamics (s_i <- sign(h_i)). There, scaling the
+weights down never changes recall, so synapse loss only hurts through the random *pattern* of
+loss, and a lightly loaded network shrugs that off: at 256 neurons / 8 memories the old
+simulator still recalled 40/40 cues with 70% of synaptic strength gone. That made a moderately
+"Alzheimer's" brain look perfect.
 
-``connectivity`` c is the mean synaptic efficacy kept in the damaged brain, exactly, in
-both damage modes:
-  deletion     E_ij = 1 if U_ij >= 1-c else 0                (mean c)
-  attenuation  E_ij = 1 - 2(1-c) U_ij           for c >= 1/2  (mean c)
-               E_ij = max(0, 1 - U_ij / (2c))   for c <  1/2  (mean c)
-(The plain DamageSpec attenuation caps at s = 1, i.e. mean 1/2, so it cannot reach c < 1/2.)
-E is monotone in c for a fixed U, so damage stays nested across connectivity levels.
+Here neurons are firing (1) or silent (0) and fire only when their recurrent input beats a fixed
+firing threshold. Synapse loss therefore weakens the drive a cue can deliver, so a damaged brain
+needs a stronger cue to complete the same memory, and past a point no cue is enough. That is
+the behaviour the simulator is meant to show.
+
+Model (illustrative abstraction, not pharmacology):
+  memory     xi in {0,1}^25 (an X), activity a = mean(xi)
+  weights    W_ij = (xi_i - a)(xi_j - a) / N,  W_ii = 0   (covariance Hebbian rule)
+  damage     W_eff = W * E * alive_i * alive_j
+             E from :func:`connectivity_efficacy` with connectivity
+             c = 1 - SYNAPSE_LOSS_AT_MAX * severity, plus round(NEURON_LOSS_AT_MAX * severity * N)
+             dead neurons (at most 2 of 25: synapse loss does most of the damage).
+             The simulator uses attenuation (every synapse weakened by a random amount): with
+             all-or-none deletion a single 25-neuron brain declines in lumpy cliffs.
+  dynamics   asynchronous; V_i <- 1 if h_i > theta, 0 if h_i < theta, unchanged on a tie,
+             theta = THRESHOLD_SYNAPSES * (weight between two memory neurons)
+  cue        strength k: round(k * 9) of the X's 9 neurons fire; noise q: round(q * 16) of the
+             16 other neurons fire as well (stray input). Everything else starts silent.
+  recall     correct if the settled state matches the X on >= threshold of all 25 neurons
+             (a lost neuron cannot fire, so it counts as silent)
+  donepezil  recovers DONEPEZIL_RECOVERY of the lost synaptic efficacy on surviving neurons
+  memantine  handled in the UI: it halves the input-noise setting before the run
+
+Damage uses common random numbers: one draw per seed, so a higher severity damages a superset of
+what a lower severity damages (the same brain getting worse).
 """
 from __future__ import annotations
 
@@ -21,36 +43,71 @@ from functools import lru_cache
 
 import numpy as np
 
-from .config import DamageSpec
-from .damage import DamageDraw, apply_damage, draw_damage_randomness
-from .metrics import evaluate_retrieval
-from .network import HopfieldNetwork
-from .patterns import random_patterns
-from .retrieval import make_orders, retrieve
+from .damage import draw_damage_randomness
+from .retrieval import make_orders
 from .rng import trial_rngs
 
-DONEPEZIL_RECOVERY = 0.5          # fraction of lost efficacy restored
-MEMANTINE_NOISE_REDUCTION = 0.5   # fraction of input noise removed
+MEMORY_ROWS = ("#...#",
+               ".#.#.",
+               "..#..",
+               ".#.#.",
+               "#...#")
+GRID = (5, 5)
+N_NEURONS = GRID[0] * GRID[1]
+
+THRESHOLD_SYNAPSES = 1.75    # firing threshold, in units of one healthy memory-memory synapse
+SYNAPSE_LOSS_AT_MAX = 0.9    # share of synaptic strength lost at 100% severity
+NEURON_LOSS_AT_MAX = 0.08    # share of neurons lost at 100% severity
+DONEPEZIL_RECOVERY = 0.5     # fraction of lost efficacy restored
+MEMANTINE_NOISE_REDUCTION = 0.5  # fraction of input noise removed (applied by the UI)
+SIMULATOR_MODE = "attenuation"
 GOLDEN_ANGLE = np.pi * (3.0 - np.sqrt(5.0))
 EDGE_NEIGHBOURS = 4
+_TOL = 1e-12
 
 
-def build_cue(pattern: np.ndarray, cue_given: float, noise: float, seed: int) -> np.ndarray:
-    """Partial cue: round(cue_given*N) bits shown (rest = 0, unknown); then round(noise*n_shown)
-    of the shown bits are flipped. Same seed -> same shown set and nested flips, so cues with
-    different noise levels are paired."""
-    n = pattern.shape[0]
-    order = np.random.default_rng(seed).permutation(n)
-    shown = order[: int(round(cue_given * n))]
-    cue = np.zeros(n, dtype=np.int8)
-    cue[shown] = pattern[shown]
-    k = int(round(noise * shown.size))
-    cue[shown[:k]] = -cue[shown[:k]]
+def memory_pattern() -> np.ndarray:
+    """The stored memory as int8 in {-1,+1} (+1 = firing), row-major over the 5x5 grid."""
+    return np.array([1 if c == "#" else -1 for row in MEMORY_ROWS for c in row], dtype=np.int8)
+
+
+def _half_up(x: float) -> int:
+    return int(np.floor(x + 0.5))
+
+
+def severity_damage(severity: float) -> tuple[float, float]:
+    """Severity in [0,1] -> (synaptic connectivity kept, neuron-loss fraction)."""
+    s = float(np.clip(severity, 0.0, 1.0))
+    return 1.0 - SYNAPSE_LOSS_AT_MAX * s, NEURON_LOSS_AT_MAX * s
+
+
+def build_cue(pattern: np.ndarray, strength: float, noise: float, seed: int) -> np.ndarray:
+    """int8 cue: +1 on round(strength * n_on) memory neurons and on round(noise * n_off) stray
+    neurons, 0 (not given) elsewhere. The same seed gives nested sets, so cues that differ only in
+    strength or noise are paired."""
+    rng = np.random.default_rng(seed)
+    on, off = np.flatnonzero(pattern > 0), np.flatnonzero(pattern <= 0)
+    on, off = rng.permutation(on), rng.permutation(off)
+    cue = np.zeros(pattern.shape[0], dtype=np.int8)
+    cue[on[: _half_up(np.clip(strength, 0, 1) * on.size)]] = 1
+    cue[off[: _half_up(np.clip(noise, 0, 1) * off.size)]] = 1
     return cue
 
 
+def cue_counts(strength: float, noise: float) -> tuple[int, int, int, int]:
+    """(memory neurons lit, of n_on, stray neurons lit, of n_off) for the stored memory."""
+    p = memory_pattern()
+    n_on, n_off = int((p > 0).sum()), int((p <= 0).sum())
+    return _half_up(strength * n_on), n_on, _half_up(noise * n_off), n_off
+
+
 def connectivity_efficacy(U: np.ndarray, connectivity: float, mode: str) -> np.ndarray:
-    """Per-synapse efficacy whose mean over U ~ Uniform(0,1) is exactly ``connectivity``."""
+    """Per-synapse efficacy whose mean over U ~ Uniform(0,1) is exactly ``connectivity``.
+
+    deletion     E = 1 if U >= 1-c else 0
+    attenuation  E = 1 - 2(1-c) U          for c >= 1/2
+                 E = max(0, 1 - U / (2c))  for c <  1/2
+    E is monotone in c for fixed U, so damage is nested across levels."""
     c = float(np.clip(connectivity, 0.0, 1.0))
     if mode == "deletion":
         E = np.where(U >= 1.0 - c, 1.0, 0.0)
@@ -65,20 +122,96 @@ def connectivity_efficacy(U: np.ndarray, connectivity: float, mode: str) -> np.n
     return E
 
 
-def damage_network(healthy: HopfieldNetwork, draw: DamageDraw, connectivity: float, mode: str,
-                   neuron_loss: float) -> HopfieldNetwork:
-    """Damaged copy: synaptic efficacy from :func:`connectivity_efficacy`, plus neuron loss."""
-    sick = apply_damage(healthy, DamageSpec(0.0, mode, float(neuron_loss)), draw)
-    sick.efficacy = sick.efficacy * connectivity_efficacy(draw.U, connectivity, mode)
-    return sick
+def covariance_weights(pattern: np.ndarray) -> np.ndarray:
+    """W_ij = (xi_i - a)(xi_j - a)/N for xi in {0,1}, zero diagonal."""
+    xi = (pattern > 0).astype(np.float64)
+    d = xi - xi.mean()
+    W = np.outer(d, d) / xi.size
+    np.fill_diagonal(W, 0.0)
+    return W
 
 
-def restore_efficacy(net: HopfieldNetwork, recovery: float) -> HopfieldNetwork:
-    """Donepezil analogue: E <- E + recovery*(1-E) (copy). Alive mask untouched."""
-    out = net.copy()
-    out.efficacy = out.efficacy + recovery * (1.0 - out.efficacy)
-    np.fill_diagonal(out.efficacy, 0.0)
-    return out
+def firing_threshold(pattern: np.ndarray) -> float:
+    a = float((pattern > 0).mean())
+    return THRESHOLD_SYNAPSES * (1.0 - a) ** 2 / pattern.size
+
+
+@dataclass
+class Brain:
+    W: np.ndarray            # learned weights (healthy)
+    efficacy: np.ndarray     # per-synapse efficacy after damage (and donepezil)
+    alive: np.ndarray        # bool per neuron
+    theta: float
+    connectivity: float      # mean efficacy kept (before donepezil)
+    neuron_loss: float
+
+    @property
+    def n(self) -> int:
+        return self.W.shape[0]
+
+    def effective_weights(self) -> np.ndarray:
+        a = self.alive.astype(np.float64)
+        return self.W * self.efficacy * np.outer(a, a)
+
+    def synaptic_strength(self) -> float:
+        """Share of the healthy synaptic strength left among all neuron pairs."""
+        off = ~np.eye(self.n, dtype=bool)
+        return float((self.efficacy * np.outer(self.alive, self.alive))[off].mean())
+
+
+def make_brain(severity: float, donepezil: bool = False, mode: str = SIMULATOR_MODE,
+               base_seed: int = 12345) -> Brain:
+    pattern = memory_pattern()
+    conn, loss = severity_damage(severity)
+    draw = draw_damage_randomness(N_NEURONS, trial_rngs(base_seed, 0).damage)
+    E = connectivity_efficacy(draw.U, conn, mode)
+    if donepezil:
+        E = E + DONEPEZIL_RECOVERY * (1.0 - E)
+        np.fill_diagonal(E, 0.0)
+    alive = np.ones(N_NEURONS, dtype=bool)
+    alive[draw.neuron_order[: _half_up(loss * N_NEURONS)]] = False
+    return Brain(covariance_weights(pattern), E, alive, firing_threshold(pattern), conn, loss)
+
+
+def settle(W: np.ndarray, cue: np.ndarray, alive: np.ndarray, theta: float,
+           orders: np.ndarray) -> tuple[list[np.ndarray], bool]:
+    """Asynchronous threshold dynamics from ``cue``. Returns display states (+1 firing,
+    -1 silent, 0 = not given yet / lost) at the start and after each sweep, and convergence."""
+    V = ((cue > 0) & alive).astype(np.float64)
+    h = W @ V
+    disp = np.where(V > 0, 1, 0).astype(np.int8)
+    states = [disp.copy()]
+    for order in orders:
+        flips = 0
+        for i in order:
+            new = 1.0 if h[i] > theta + _TOL else 0.0 if h[i] < theta - _TOL else V[i]
+            if new != V[i]:
+                h += W[:, i] * (new - V[i])
+                V[i] = new
+                flips += 1
+            disp[i] = 1 if V[i] > 0 else -1
+        states.append(disp.copy())
+        if flips == 0:
+            return states, True
+    return states, False
+
+
+def score(final: np.ndarray, alive: np.ndarray, target: np.ndarray, threshold: float,
+          converged: bool) -> dict:
+    shown = np.where(alive & (final > 0), 1, -1)
+    on = target > 0
+    acc = float(np.mean(shown == target))
+    hit, stray = int((shown[on] > 0).sum()), int((shown[~on] > 0).sum())
+    if not converged:
+        kind = "unsettled"
+    elif acc >= threshold:
+        kind = "recalled"
+    elif hit + stray == 0:
+        kind = "silent"
+    else:
+        kind = "partial"
+    return {"accuracy": acc, "success": bool(converged and acc >= threshold), "converged": converged,
+            "kind": kind, "hit": hit, "n_on": int(on.sum()), "stray": stray}
 
 
 @lru_cache(maxsize=8)
@@ -98,76 +231,52 @@ def neuron_layout(n: int, k: int = EDGE_NEIGHBOURS) -> tuple[np.ndarray, np.ndar
 
 @dataclass
 class BrainRun:
-    net: HopfieldNetwork
+    brain: Brain
     cue: np.ndarray
-    states: list          # state at start (cue) and after each sweep
-    weights: np.ndarray   # effective weights
+    states: list            # display state at start (cue) and after each sweep
+    weights: np.ndarray     # effective weights
     metrics: dict
     update_pos: np.ndarray  # (sweeps, N): when each neuron is visited within each sweep, in [0,1)
 
 
-def _run(net, cue, target, patterns, max_sweeps, thr, rngs) -> BrainRun:
-    W = net.effective_weights()
-    res = retrieve(net, cue, max_sweeps, rngs.fresh_dynamics(), record_states=True, W_eff=W)
-    m = evaluate_retrieval(res, target, net.alive, patterns, thr)
-    # Same generator stream as retrieve() -> the exact asynchronous update order it used.
-    orders = make_orders(net.alive, max_sweeps, rngs.fresh_dynamics())[: res.sweeps]
-    pos = np.full((res.sweeps, net.n), np.nan)
+def _orders(alive: np.ndarray, max_sweeps: int, seed) -> np.ndarray:
+    return make_orders(alive, max_sweeps, np.random.default_rng(seed))
+
+
+def run_stimulator(severity: float, noise: float, strength: float, donepezil: bool = False,
+                   mode: str = SIMULATOR_MODE, max_sweeps: int = 30, threshold: float = 0.95,
+                   base_seed: int = 12345) -> dict:
+    """One brain at ``severity`` recalling the X from one cue."""
+    target = memory_pattern()
+    brain = make_brain(severity, donepezil, mode, base_seed)
+    W = brain.effective_weights()
+    cue = build_cue(target, strength, noise, (base_seed * 7919) & 0xFFFFFFFF)
+    orders = _orders(brain.alive, max_sweeps, [base_seed & 0xFFFFFFFF, 0])
+    states, conv = settle(W, cue, brain.alive, brain.theta, orders)
+    sweeps = len(states) - 1
+    pos = np.full((sweeps, brain.n), np.nan)
     if orders.shape[1]:
         ranks = np.arange(orders.shape[1]) / orders.shape[1]
-        for k in range(res.sweeps):
+        for k in range(sweeps):
             pos[k, orders[k]] = ranks
-    return BrainRun(net, np.where(net.alive, cue, 0).astype(np.int8), res.state_history, W, m, pos)
+    m = score(states[-1], brain.alive, target, threshold, conv)
+    m["sweeps"] = sweeps
+    run = BrainRun(brain, np.where(brain.alive, cue, 0).astype(np.int8), states, W, m, pos)
+    return {"target": target, "brain": run}
 
 
-def _build(n, n_patterns, connectivity, donepezil, neuron_loss, mode, base_seed):
-    rngs = trial_rngs(base_seed, 0)
-    pats = random_patterns(n_patterns, n, rngs.patterns)
-    healthy = HopfieldNetwork.from_patterns(pats)
-    sick = damage_network(healthy, draw_damage_randomness(n, rngs.damage), connectivity, mode,
-                          neuron_loss)
-    if donepezil:
-        sick = restore_efficacy(sick, DONEPEZIL_RECOVERY)
-    return rngs, pats, healthy, sick
-
-
-def _noise_for_damaged(noise: float, memantine: bool) -> float:
-    return noise * (1 - MEMANTINE_NOISE_REDUCTION) if memantine else noise
-
-
-def run_stimulator(n: int, n_patterns: int, connectivity: float, noise: float, cue_given: float,
-                   donepezil: bool = False, memantine: bool = False, neuron_loss: float = 0.0,
-                   mode: str = "deletion", max_sweeps: int = 30, threshold: float = 0.95,
-                   base_seed: int = 12345, pattern_idx: int = 0) -> dict:
-    """Healthy vs damaged retrieval of one stored memory from the same (paired) cue."""
-    rngs, pats, healthy, sick = _build(n, n_patterns, connectivity, donepezil, neuron_loss, mode,
-                                       base_seed)
-    target = pats[pattern_idx % n_patterns]
-    cue_seed = base_seed * 7919 + pattern_idx
-    cue_h = build_cue(target, cue_given, noise, cue_seed)
-    cue_s = build_cue(target, cue_given, _noise_for_damaged(noise, memantine), cue_seed)
-    return {"target": target, "patterns": pats,
-            "healthy": _run(healthy, cue_h, target, pats, max_sweeps, threshold, rngs),
-            "damaged": _run(sick, cue_s, target, pats, max_sweeps, threshold, rngs)}
-
-
-def recall_reliability(n: int, n_patterns: int, connectivity: float, noise: float, cue_given: float,
-                       donepezil: bool = False, memantine: bool = False, neuron_loss: float = 0.0,
-                       mode: str = "deletion", max_sweeps: int = 30, threshold: float = 0.95,
+def recall_reliability(severity: float, noise: float, strength: float, donepezil: bool = False,
+                       mode: str = SIMULATOR_MODE, max_sweeps: int = 30, threshold: float = 0.95,
                        base_seed: int = 12345, n_cues: int = 40) -> dict:
-    """Success counts over ``n_cues`` fresh cues (cycling through every stored memory), same two
-    networks as :func:`run_stimulator`. Shows whether the single animated run is typical."""
-    _, pats, healthy, sick = _build(n, n_patterns, connectivity, donepezil, neuron_loss, mode,
-                                    base_seed)
-    Wh, Ws = healthy.effective_weights(), sick.effective_weights()
-    noise_s = _noise_for_damaged(noise, memantine)
-    ok = {"healthy": 0, "damaged": 0}
+    """Successes over ``n_cues`` fresh cues (different neurons lit) for the same brain as
+    :func:`run_stimulator`. Shows whether the single animated run is typical."""
+    target = memory_pattern()
+    brain = make_brain(severity, donepezil, mode, base_seed)
+    W = brain.effective_weights()
+    ok = 0
     for k in range(n_cues):
-        idx = k % n_patterns
-        seed = base_seed * 7919 + 100_003 * (k + 1) + idx
-        target = pats[idx]
-        for name, net, W, nz in (("healthy", healthy, Wh, noise), ("damaged", sick, Ws, noise_s)):
-            res = retrieve(net, build_cue(target, cue_given, nz, seed), max_sweeps,
-                           np.random.default_rng([base_seed & 0xFFFFFFFF, k]), W_eff=W)
-            ok[name] += evaluate_retrieval(res, target, net.alive, pats, threshold)["success"]
-    return {**ok, "n": n_cues}
+        cue = build_cue(target, strength, noise, (base_seed * 7919 + 100_003 * (k + 1)) & 0xFFFFFFFF)
+        orders = _orders(brain.alive, max_sweeps, [base_seed & 0xFFFFFFFF, k + 1])
+        states, conv = settle(W, cue, brain.alive, brain.theta, orders)
+        ok += score(states[-1], brain.alive, target, threshold, conv)["success"]
+    return {"recalled": ok, "n": n_cues}

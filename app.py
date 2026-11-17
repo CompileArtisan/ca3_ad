@@ -1,7 +1,7 @@
 """Streamlit entry point: thin; all model logic lives in ca3model/, all UI in ui/."""
 import streamlit as st
 
-st.set_page_config(page_title="Neurolab", page_icon=":material/neurology:", layout="wide",
+st.set_page_config(page_title="RECALL4 NEUROLAB", page_icon=":material/neurology:", layout="wide",
                    initial_sidebar_state="collapsed")
 
 from ui.neurolab import render_neurolab  # noqa: E402

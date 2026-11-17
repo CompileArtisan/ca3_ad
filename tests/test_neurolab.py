@@ -2,9 +2,22 @@ import numpy as np
 import pytest
 
 from ca3model.damage import draw_damage_randomness
-from ca3model.neurolab import (build_cue, connectivity_efficacy, neuron_layout, recall_reliability,
-                               run_stimulator)
+from ca3model.neurolab import (N_NEURONS, build_cue, connectivity_efficacy, make_brain,
+                               memory_pattern, neuron_layout, recall_reliability, run_stimulator,
+                               severity_damage)
 from ca3model.rng import trial_rngs
+
+SEEDS = range(1, 9)
+
+
+def _mean_recall(sev, noise, strength, donepezil=False, n_cues=20):
+    return np.mean([recall_reliability(sev, noise, strength, donepezil, base_seed=s,
+                                       n_cues=n_cues)["recalled"] / n_cues for s in SEEDS])
+
+
+def test_memory_is_an_x_on_a_5x5_grid():
+    img = memory_pattern().reshape(5, 5) > 0
+    assert np.array_equal(img, np.eye(5, dtype=bool) | np.fliplr(np.eye(5, dtype=bool)))
 
 
 @pytest.mark.parametrize("mode", ["deletion", "attenuation"])
@@ -19,58 +32,70 @@ def test_connectivity_is_the_mean_efficacy_kept(mode, c):
 
 
 @pytest.mark.parametrize("mode", ["deletion", "attenuation"])
-def test_connectivity_damage_is_nested(mode):
-    U = draw_damage_randomness(120, trial_rngs(4, 0).damage).U
-    levels = [connectivity_efficacy(U, c, mode) for c in (0.05, 0.2, 0.45, 0.5, 0.7, 1.0)]
-    for lo, hi in zip(levels, levels[1:]):
-        assert np.all(lo <= hi + 1e-12)
+def test_severity_damages_the_same_brain_further(mode):
+    brains = [make_brain(s, mode=mode) for s in (0.0, 0.2, 0.5, 0.8, 1.0)]
+    for lo, hi in zip(brains[1:], brains):
+        assert np.all(lo.efficacy <= hi.efficacy + 1e-12)
+        assert np.all(lo.alive <= hi.alive)
+    assert brains[0].alive.all() and brains[0].synaptic_strength() == pytest.approx(1.0)
 
 
 def test_cue_counts():
-    pat = np.ones(256, dtype=np.int8)
-    cue = build_cue(pat, 0.30, 0.10, seed=1)
-    shown = int(round(0.30 * 256))
-    assert np.count_nonzero(cue) == shown
-    assert np.sum(cue == -1) == int(round(0.10 * shown))
+    x = memory_pattern()
+    cue = build_cue(x, 0.40, 0.10, seed=1)
+    assert np.sum((cue > 0) & (x > 0)) == 4          # 40% of the X's 9 neurons
+    assert np.sum((cue > 0) & (x < 0)) == 2          # 10% of the other 16 fire by mistake
+
+
+def test_healthy_brain_completes_the_x_from_a_40pct_cue():
+    for s in SEEDS:
+        assert recall_reliability(0.0, 0.10, 0.40, base_seed=s)["recalled"] == 40
+
+
+def test_alzheimers_brain_is_bad_at_a_40pct_cue():
+    """The reported bug: at a 40% cue the damaged brain still recalled 100%."""
+    assert _mean_recall(0.5, 0.10, 0.40) < 0.75
+    assert _mean_recall(0.8, 0.10, 0.40) < 0.35
+
+
+def test_recall_gets_worse_with_severity_and_better_with_cue_strength():
+    sev = [_mean_recall(s, 0.10, 0.40) for s in (0.0, 0.3, 0.6, 0.9)]
+    assert all(a >= b for a, b in zip(sev, sev[1:])) and sev[0] - sev[-1] > 0.7
+    cue = [_mean_recall(0.5, 0.10, k) for k in (0.2, 0.4, 0.6, 1.0)]
+    assert all(a <= b for a, b in zip(cue, cue[1:])) and cue[-1] - cue[0] > 0.5
+
+
+def test_treatments_help():
+    assert _mean_recall(0.7, 0.10, 0.40, donepezil=True) > _mean_recall(0.7, 0.10, 0.40)
+    # memantine = lower input noise
+    assert _mean_recall(0.3, 0.15, 0.40) > _mean_recall(0.3, 0.30, 0.40)
 
 
 def _replay(run):
-    """Re-run the async dynamics from the recorded per-sweep update positions."""
-    W, s = run.weights, run.states[0].astype(float).copy()
-    tol = 1e-9 * np.abs(W).max()
-    n_alive = int(run.net.alive.sum())
+    """Re-run the threshold dynamics from the recorded per-sweep update positions."""
+    W, theta, alive = run.weights, run.brain.theta, run.brain.alive
+    V = ((run.states[0] > 0) & alive).astype(float)
     for k in range(len(run.states) - 1):
         pos = np.where(np.isnan(run.update_pos[k]), np.inf, run.update_pos[k])
-        for i in np.argsort(pos, kind="stable")[:n_alive]:
-            h = W[i] @ s
-            s[i] = 1 if h > tol else -1 if h < -tol else s[i]
-        assert np.array_equal(s.astype(np.int8), run.states[k + 1])
+        for i in np.argsort(pos, kind="stable")[: int(alive.sum())]:
+            h = W[i] @ V
+            V[i] = 1 if h > theta + 1e-12 else 0 if h < theta - 1e-12 else V[i]
+        disp = np.where(alive, np.where(V > 0, 1, -1), 0)
+        assert np.array_equal(disp, run.states[k + 1])
 
 
-@pytest.mark.parametrize("conn,loss", [(0.1, 0.0), (0.3, 0.2), (1.0, 0.0)])
-def test_animation_order_reproduces_the_simulation(conn, loss):
-    r = run_stimulator(144, 6, conn, 0.1, 0.3, neuron_loss=loss, base_seed=7)
-    _replay(r["healthy"])
-    _replay(r["damaged"])
+@pytest.mark.parametrize("sev,noise,strength", [(0.0, 0.1, 0.4), (0.5, 0.2, 0.6), (0.9, 0.0, 1.0)])
+def test_animation_order_reproduces_the_simulation(sev, noise, strength):
+    _replay(run_stimulator(sev, noise, strength, base_seed=7)["brain"])
 
 
-def test_healthy_brain_unaffected_by_controls_meant_for_the_damaged_one():
-    a = run_stimulator(144, 6, 0.1, 0.2, 0.3, base_seed=5)
-    b = run_stimulator(144, 6, 0.9, 0.2, 0.3, donepezil=True, memantine=True, base_seed=5)
-    assert np.array_equal(a["healthy"].states[-1], b["healthy"].states[-1])
-
-
-def test_treatments_help_on_average():
-    base = recall_reliability(256, 8, 0.10, 0.10, 0.30, n_cues=24)
-    done = recall_reliability(256, 8, 0.10, 0.10, 0.30, donepezil=True, n_cues=24)
-    noisy = recall_reliability(256, 8, 0.12, 0.30, 0.30, n_cues=24)
-    mem = recall_reliability(256, 8, 0.12, 0.30, 0.30, memantine=True, n_cues=24)
-    assert base["healthy"] == base["n"]
-    assert done["damaged"] > base["damaged"]
-    assert mem["damaged"] >= noisy["damaged"]
+def test_severity_zero_is_healthy():
+    conn, loss = severity_damage(0.0)
+    assert conn == 1.0 and loss == 0.0
+    assert run_stimulator(0.0, 0.1, 0.4)["brain"].metrics["success"]
 
 
 def test_layout_edges_valid():
-    xy, edges = neuron_layout(256)
-    assert xy.shape == (256, 2) and np.all(np.hypot(*xy.T) <= 1.0)
-    assert np.all(edges[:, 0] < edges[:, 1]) and edges.max() < 256
+    xy, edges = neuron_layout(N_NEURONS)
+    assert xy.shape == (N_NEURONS, 2) and np.all(np.hypot(*xy.T) <= 1.0)
+    assert np.all(edges[:, 0] < edges[:, 1]) and edges.max() < N_NEURONS

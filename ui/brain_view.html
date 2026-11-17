@@ -19,11 +19,11 @@ label.chk{color:var(--muted);display:flex;align-items:center;gap:6px;cursor:poin
 .legend span{display:inline-flex;align-items:center;gap:6px}
 .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
 .ln{width:16px;height:0;border-top:2px solid;display:inline-block}
-.layout{display:grid;grid-template-columns:150px 1fr 1fr;gap:12px}
+.layout{display:grid;grid-template-columns:170px minmax(0,900px);gap:12px;justify-content:center}
 @media (max-width:900px){.layout{grid-template-columns:1fr}.mem{flex-direction:row!important;flex-wrap:wrap}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px}
 .mem{display:flex;flex-direction:column;gap:6px}
-.mem canvas{width:120px;height:120px;border-radius:8px}
+.mem canvas{width:140px;height:140px;border-radius:8px}
 .lbl{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .note{font-size:11px;color:var(--muted);line-height:1.4}
 .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
@@ -33,8 +33,8 @@ label.chk{color:var(--muted);display:flex;align-items:center;gap:6px;cursor:poin
 .badge.ok{color:var(--ok);border-color:rgba(52,211,153,.45);background:rgba(52,211,153,.08)}
 .badge.bad{color:var(--bad);border-color:rgba(251,113,133,.45);background:rgba(251,113,133,.08)}
 canvas.brain{width:100%;aspect-ratio:560/290;display:block}
-.bottom{display:grid;grid-template-columns:116px 1fr;gap:12px;align-items:start;margin-top:4px}
-.bottom canvas.grid{width:116px;height:116px;border-radius:8px}
+.bottom{display:grid;grid-template-columns:140px 1fr;gap:12px;align-items:start;margin-top:4px}
+.bottom canvas.grid{width:140px;height:140px;border-radius:8px}
 .big{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
 .sub{color:var(--muted);font-size:11px;margin:2px 0 6px}
 canvas.spark{width:100%;height:46px;display:block}
@@ -51,9 +51,10 @@ canvas.spark{width:100%;height:46px;display:block}
   <label class="chk"><input type="checkbox" id="err"> mark wrong neurons</label>
 </div>
 <div class="legend">
-  <span><i class="dot" style="background:var(--fire)"></i>firing (+1)</span>
-  <span><i class="dot" style="background:var(--silent)"></i>silent (−1)</span>
+  <span><i class="dot" style="background:var(--fire)"></i>firing</span>
+  <span><i class="dot" style="background:var(--silent)"></i>silent</span>
   <span><i class="dot" style="border:1.5px solid var(--unk)"></i>not in cue yet</span>
+  <span><i class="dot" style="background:var(--fire);box-shadow:0 0 0 1.5px #ff3d6e"></i>noise (lit by mistake)</span>
   <span><i class="dot" style="background:#2b2840;border:1px solid var(--dead)"></i>lost neuron</span>
   <span><i class="ln" style="border-color:var(--agree)"></i>synapse agrees</span>
   <span><i class="ln" style="border-color:var(--conflict)"></i>synapse conflicts</span>
@@ -61,7 +62,7 @@ canvas.spark{width:100%;height:46px;display:block}
 </div>
 <div class="layout">
   <div class="card mem">
-    <div><div class="lbl">Stored memory</div><canvas id="tgt" width="240" height="240"></canvas></div>
+    <div><div class="lbl">Stored memory · X</div><canvas id="tgt" width="240" height="240"></canvas></div>
     <div><div class="lbl">Cue shown</div><canvas id="cue" width="240" height="240"></canvas></div>
     <div class="note" id="cuenote"></div>
   </div>
@@ -97,9 +98,9 @@ function flipAge(b, u, i) {               // time since neuron i last flipped (s
   }
   return Infinity;
 }
-function accuracy(b, s) {
-  let ok = 0; for (let i = 0; i < N; i++) if (b.alive[i] && s[i] === D.target[i]) ok++;
-  return b.nAlive ? ok / b.nAlive : 0;
+function accuracy(b, s) {               // over all N: a lost neuron cannot fire, so it is silent
+  let ok = 0; for (let i = 0; i < N; i++) if ((b.alive[i] ? s[i] : -1) === D.target[i]) ok++;
+  return ok / N;
 }
 D.brains.forEach(b => {                   // precompute accuracy curve for sparklines
   b.nAlive = b.alive.reduce((x, y) => x + y, 0);
@@ -127,6 +128,8 @@ function drawGrid(cv, s, b, opts = {}) {
       ctx.strokeStyle = "rgba(255,107,138,0.55)"; ctx.lineWidth = 1; ctx.beginPath();
       ctx.moveTo(x + cw * .25, y + ch * .25); ctx.lineTo(x + cw * .75, y + ch * .75);
       ctx.moveTo(x + cw * .75, y + ch * .25); ctx.lineTo(x + cw * .25, y + ch * .75); ctx.stroke();
+    } else if (opts.stray && s[i] > 0 && D.target[i] < 0) {
+      ctx.strokeStyle = "#ff3d6e"; ctx.lineWidth = 2; ctx.strokeRect(x + 1.5, y + 1.5, cw - 3, ch - 3);
     } else if (opts.err && b && s[i] !== D.target[i]) {
       ctx.strokeStyle = "#ff3d6e"; ctx.lineWidth = 1.6; ctx.strokeRect(x + 1.2, y + 1.2, cw - 2.4, ch - 2.4);
     }
@@ -191,12 +194,12 @@ function drawCard(card, u) {
     const [a, c] = E[e]; if (b.eff[e] > 0 || !b.alive[a] || !b.alive[c]) continue;
     const [x1, y1] = nodeXY(a), [x2, y2] = nodeXY(c); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
   }
-  ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1.5;
+  ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 2;
   for (let e = 0; e < E.length; e++) {
     const [a, c] = E[e], eff = b.eff[e];
     if (eff <= 0 || !b.alive[a] || !b.alive[c]) continue;
     const ag = D.wsign[e] * s[a] * s[c];
-    const al = (0.12 + 0.55 * eff) * (ag === 0 ? 0.35 : 1);
+    const al = (0.18 + 0.6 * eff) * (ag === 0 ? 0.35 : 1);
     ctx.strokeStyle = ag > 0 ? `rgba(${COL.agree},${al})` : ag < 0 ? `rgba(${COL.conflict},${al})` : `rgba(140,130,190,${al})`;
     const [x1, y1] = nodeXY(a), [x2, y2] = nodeXY(c);
     ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
@@ -232,7 +235,7 @@ function drawCard(card, u) {
   const settled = u >= b.sweeps && u > 0;
   card.badge.className = "badge" + (settled ? (b.success ? " ok" : " bad") : "");
   card.badge.textContent = u <= 0 ? "Cue presented" : !settled ? "Recalling…" : b.success ? "✓ Memory recalled" : "✗ Recall failed";
-  card.verdict.textContent = settled ? b.verdict : "of surviving neurons match the stored memory";
+  card.verdict.textContent = settled ? b.verdict : "of the " + N + " neurons match the stored X";
   drawSpark(card, u);
 }
 function drawSpark(card, u) {
@@ -289,7 +292,7 @@ function setHover(i, ev, card) {
   tip.style.display = "block"; tip.style.left = (ev.clientX + 12) + "px"; tip.style.top = (ev.clientY + 12) + "px";
 }
 drawGrid(document.getElementById("tgt"), D.target, null);
-drawGrid(document.getElementById("cue"), D.brains[0].states[0], null);
+drawGrid(document.getElementById("cue"), D.brains[0].states[0], null, {stray: true});
 document.getElementById("cuenote").innerHTML = D.cueNote;
 
 // ---------- clock

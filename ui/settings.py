@@ -1,4 +1,4 @@
-"""Model settings. The simulator shows only its own five controls; everything else lives in
+"""Model settings. The simulator shows only its own controls; everything else lives in
 the Advanced tab and is returned as config objects (no model logic here)."""
 from __future__ import annotations
 
@@ -42,20 +42,22 @@ def render_settings() -> Settings:
         st.session_state["base_seed"] = 12345
 
     c1, c2, c3 = st.columns(3)
-    with c1, _group("Network", "Also used by the simulator."):
+    with c1, _group("Network", "Analysis tabs only; the simulator is a fixed 25-neuron brain. "
+                    "Max sweeps and the success threshold also apply to the simulator."):
         n = st.select_slider("Network size N", options=SQUARES, value=256, help=HELP["n"])
         p = st.slider("Stored memories P", 1, 60, 8, help=HELP["p"])
         st.caption(f"load α = P/N = **{p / n:.3f}**  (theory: α_c ≈ 0.138 for random patterns)")
         sweeps = st.slider("Max sweeps", 5, 100, 30, help=HELP["sweeps"])
         thr = st.slider("Success threshold (survivor accuracy)", 0.80, 1.00, 0.95, 0.01,
                         help=HELP["thr"])
-    with c2, _group("Damage", "Neuron loss and weakening mode also apply to the simulator."):
+    with c2, _group("Damage", "Analysis tabs only; the simulator's damage comes from its "
+                    "severity slider."):
         neu = st.slider("Neuronal loss fraction", 0.0, 0.9, 0.0, 0.01, help=HELP["neu"])
         mode = st.radio("Weakening mode", ["deletion", "attenuation"], horizontal=True,
                         help=HELP["syn_mode"])
         syn = st.slider("Synaptic weakening severity", 0.0, 1.0, 0.0, 0.01,
                         help=HELP["syn"] + " Analysis tabs only; the simulator uses its "
-                                          "connectivity slider.")
+                                          "severity slider.")
         eta = st.slider("Plasticity efficacy (optional encoding impairment)", 0.0, 1.0, 1.0, 0.05,
                         help=HELP["eta"])
         n_new = st.slider("New patterns (learning experiments)", 1, 20, 5, help=HELP["new"])

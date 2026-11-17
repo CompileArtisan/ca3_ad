@@ -1,4 +1,6 @@
-# CA3-inspired Hopfield model of memory deterioration
+# RECALL4 NEUROLAB
+
+A CA3-inspired model of memory deterioration.
 
 Interactive, reproducible simulation of a Hopfield associative memory (inspired by hippocampal CA3 recurrent
 collaterals) showing how two abstract forms of damage -- synaptic weakening and neuron loss -- affect
@@ -22,9 +24,20 @@ pattern completion from degraded cues and the learning of new patterns.
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
-pytest              # 41 invariant tests (includes UI smoke tests; ~20 s)
+pytest              # 68 tests (includes UI smoke tests; ~25 s)
 ```
 Numba is used for the asynchronous update kernel; if it cannot be imported the code falls back to pure NumPy automatically.
+
+## Simulator tab
+One brain, one stored memory (an X on a 5x5 grid of 25 model neurons). Model in `ca3model/neurolab.py`.
+- **Alzheimer's severity** (0% = healthy) weakens every synapse by a random amount (up to 90% of synaptic
+  strength gone at 100%) and removes up to 2 neurons. Damage is nested: a higher severity is the same brain worse.
+- Neurons fire only when recurrent input beats a firing threshold, so weaker synapses mean a cue delivers less
+  drive. A healthy brain completes the X from a 40% cue; a moderately damaged one often cannot.
+  (The analysis tabs use zero-threshold sign dynamics, where uniform weakening never changes recall; that is
+  why the old simulator showed a damaged brain recalling perfectly.)
+- **Cue strength** = share of the X's 9 neurons lit; **input noise** = share of the other 16 lit by mistake.
+- **Donepezil** restores 50% of lost synaptic strength; **memantine** halves input noise (the slider moves).
 
 ## Layout
 `ca3model/` model, experiments and Plotly builders (no Streamlit); `ui/` + `app.py` dashboard; `tests/` invariant tests;

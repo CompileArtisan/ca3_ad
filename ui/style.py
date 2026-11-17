@@ -3,9 +3,9 @@
 HERO = """
 <div class="nl-hero">
   <div class="nl-eyebrow">CA3 attractor-network model</div>
-  <h1>Neuro<span>lab</span></h1>
-  <p>Show a healthy brain and an Alzheimer's-inspired brain the same scrap of a memory, and watch
-  whether each one can complete it.</p>
+  <h1>RECALL4 <span>NEUROLAB</span></h1>
+  <p>Show a brain part of a memory, turn up how Alzheimer's it is, and watch whether it can still
+  complete it.</p>
 </div>
 """
 
@@ -32,7 +32,8 @@ header[data-testid="stHeader"]{background:transparent}
 .nl-rel span{color:#c9c4ef}.nl-rel b{font-variant-numeric:tabular-nums}
 .nl-track{grid-column:1/-1;height:6px;border-radius:99px;background:#241f45;overflow:hidden}
 .nl-track i{display:block;height:100%;border-radius:99px}
-.nl-healthy .nl-track i{background:#2dd4bf}.nl-damaged .nl-track i{background:#fb7185}
+.nl-track i{background:var(--acc,#a78bfa)}
+.nl-rel small{grid-column:1/-1;color:#9a94c7;font-size:.8rem}
 iframe{border-radius:16px}
 </style>
 """
