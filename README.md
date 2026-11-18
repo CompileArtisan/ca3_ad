@@ -29,15 +29,22 @@ pytest              # 68 tests (includes UI smoke tests; ~25 s)
 Numba is used for the asynchronous update kernel; if it cannot be imported the code falls back to pure NumPy automatically.
 
 ## Simulator tab
-One brain, one stored memory (an X on a 5x5 grid of 25 model neurons). Model in `ca3model/neurolab.py`.
-- **Alzheimer's severity** (0% = healthy) weakens every synapse by a random amount (up to 90% of synaptic
-  strength gone at 100%) and removes up to 2 neurons. Damage is nested: a higher severity is the same brain worse.
-- Neurons fire only when recurrent input beats a firing threshold, so weaker synapses mean a cue delivers less
-  drive. A healthy brain completes the X from a 40% cue; a moderately damaged one often cannot.
-  (The analysis tabs use zero-threshold sign dynamics, where uniform weakening never changes recall; that is
-  why the old simulator showed a damaged brain recalling perfectly.)
-- **Cue strength** = share of the X's 9 neurons lit; **input noise** = share of the other 16 lit by mistake.
-- **Donepezil** restores 50% of lost synaptic strength; **memantine** halves input noise (the slider moves).
+The CA3 Hopfield reference model of the two Monte Carlo reports ("CA3 Hopfield Monte Carlo Experiment:
+Connectivity Loss, Noise and Simulated Pharmacology" and "Experiment 2: Monte Carlo Validation of Donepezil- and
+Memantine-Inspired Interventions", 18 Nov 2026), with their values and settings. Model in `ca3model/neurolab.py`.
+- 25 neurons with states ±1; 3 random stored memories (seed 20261118), target = memory #1; Hebbian
+  W = (1/N) Σ ξξᵀ, no self-connections.
+- Cue: the same 5 neurons (2, 4, 6, 7, 11; seed 20261119) get memory #1's values, the other 20 start silent (0).
+- **Functional connectivity** (20–100%) keeps exactly round(c × 300) of the 300 neuron pairs; removed pairs lose
+  both w_ij and w_ji, survivors keep full strength. **Input noise** (0–50%) corrupts each neuron with probability p.
+- Asynchronous updates in a fresh random order each sweep, s = sign(h), h = 0 keeps the state; at most 100 sweeps;
+  success = settled with overlap m ≥ 0.8.
+- Interventions (Experiment 2, default): **donepezil-inspired** = the 5 cue neurons at amplitude 1.25 / 1.50 / 1.75
+  (effective cue 25 / 30 / 35%); **memantine-inspired** = input noise 2 / 4 / 6 points lower (10% → 8 / 6 / 4%).
+  Experiment 1's version (cue gain g = 0.1, activity gate θ = 0.04) is in Advanced.
+- The table under the animation repeats the settings over 2,000 matched trials (seed 8,000,000 + t), as in
+  Experiment 2. At the reports' settings it lands within Monte Carlo error of their published numbers
+  (`tests/test_neurolab.py` checks this).
 
 ## Layout
 `ca3model/` model, experiments and Plotly builders (no Streamlit); `ui/` + `app.py` dashboard; `tests/` invariant tests;

@@ -2,10 +2,7 @@
 
 HERO = """
 <div class="nl-hero">
-  <div class="nl-eyebrow">CA3 attractor-network model</div>
   <h1>RECALL4 <span>NEUROLAB</span></h1>
-  <p>Show a brain part of a memory, turn up how Alzheimer's it is, and watch whether it can still
-  complete it.</p>
 </div>
 """
 

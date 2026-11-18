@@ -33,29 +33,31 @@ def test_every_heavy_suite_runs_from_the_ui():
         assert key in at.session_state
 
 
-def test_one_brain_with_severity_and_connectivity_sliders_and_renamed_title():
-    at = AppTest.from_file(APP, default_timeout=120).run()
-    assert _slider(at, "Alzheimer's severity").value == 65
-    assert any(s.label.startswith("Synaptic connectivity") for s in at.slider)
+def test_one_brain_with_severity_connectivity_noise_cue_and_drug_controls():
+    at = AppTest.from_file(APP, default_timeout=300).run()
+    assert _slider(at, "Alzheimer's severity").value == 75
+    assert _slider(at, "Synaptic connectivity").value == 40       # Experiment B's level
+    assert _slider(at, "Input noise").value == 10
+    assert _slider(at, "Cue strength").value == 20                # the reports' 5-neuron cue
+    assert {t.label for t in at.toggle} >= {"Donepezil", "Memantine"}
     assert any("RECALL4" in h.body for h in at.html if hasattr(h, "body"))
+    assert not any("CA3 attractor-network model" in h.body for h in at.html if hasattr(h, "body"))
 
 
 def test_memantine_moves_input_noise_down_and_back():
-    at = AppTest.from_file(APP, default_timeout=120).run()
-    _slider(at, "Input noise").set_value(20).run()
-    mem = next(t for t in at.toggle if t.label == "Memantine")
-    mem.set_value(True).run()
-    assert _slider(at, "Input noise").value == 10
+    at = AppTest.from_file(APP, default_timeout=300).run()
+    next(t for t in at.toggle if t.label == "Memantine").set_value(True).run()
+    assert _slider(at, "Input noise").value == 4                  # 10% -> 4% (Experiment 2)
     assert not at.exception
     next(t for t in at.toggle if t.label == "Memantine").set_value(False).run()
-    assert _slider(at, "Input noise").value == 20
+    assert _slider(at, "Input noise").value == 10
 
 
 def test_connectivity_and_severity_sliders_are_linked():
-    at = AppTest.from_file(APP, default_timeout=120).run()
-    assert _slider(at, "Synaptic connectivity").value == 42      # 65% severity -> 100 - 0.9*65
+    at = AppTest.from_file(APP, default_timeout=300).run()
     _slider(at, "Alzheimer's severity").set_value(0).run()
     assert _slider(at, "Synaptic connectivity").value == 100
-    _slider(at, "Synaptic connectivity").set_value(55).run()
+    _slider(at, "Synaptic connectivity").set_value(60).run()
     assert _slider(at, "Alzheimer's severity").value == 50
-    assert not at.exception
+    next(t for t in at.toggle if t.label == "Donepezil").set_value(True).run()
+    assert not at.exception, at.exception
