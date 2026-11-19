@@ -69,27 +69,27 @@ canvas.spark{width:100%;height:46px;display:block}
   <label class="chk"><input type="checkbox" id="err"> mark wrong neurons</label>
 </div>
 <div class="legend">
-  <span><i class="dot" style="background:var(--fire)"></i>state +1</span>
-  <span><i class="dot" style="background:var(--silent)"></i>state −1</span>
-  <span><i class="dot" style="border:1.5px solid var(--unk)"></i>0 · silent (not in the cue)</span>
-  <span><i class="dot" style="background:var(--fire);box-shadow:0 0 0 1.5px #ff3d6e"></i>input noise (corrupted)</span>
+  <span><i class="dot" style="background:var(--fire)"></i>firing</span>
+  <span><i class="dot" style="background:var(--silent)"></i>silent</span>
+  <span><i class="dot" style="border:1.5px solid var(--unk)"></i>not in cue yet</span>
+  <span><i class="dot" style="background:var(--fire);box-shadow:0 0 0 1.5px #ff3d6e"></i>noise (lit by mistake)</span>
+  <span><i class="dot" style="background:#2b2840;border:1px solid var(--dead)"></i>lost neuron</span>
   <span><i class="ln" style="border-color:var(--agree)"></i>synapse agrees</span>
   <span><i class="ln" style="border-color:var(--conflict)"></i>synapse conflicts</span>
-  <span><i class="ln" style="border-color:#6b5a7a;border-top-style:dotted"></i>pair removed</span>
+  <span><i class="ln" style="border-color:#6b5a7a;border-top-style:dotted"></i>synapse lost</span>
 </div>
 <div class="layout">
   <div class="card mem">
-    <div><div class="lbl">Stored memory #1 · target</div><canvas id="tgt" width="240" height="240"></canvas></div>
+    <div><div class="lbl">Stored memory · X</div><canvas id="tgt" width="240" height="240"></canvas></div>
     <div><div class="lbl">Cue shown</div><canvas id="cue" width="240" height="240"></canvas></div>
     <div class="note" id="cuenote"></div>
-    <div id="others"></div>
   </div>
   <div id="cards" style="display:contents"></div>
   <div class="card wcard">
     <div class="head"><div class="title">Synaptic weights w<sub>ij</sub> · healthy vs this brain</div></div>
     <div class="note">Every connection between the 25 neurons (row = neuron i, column = neuron j), scaled so
-      +1 is the strongest healthy synapse (3/25). A removed pair sets both w<sub>ij</sub> and w<sub>ji</sub>
-      to 0; surviving weights keep full strength. Hover a cell to read it.</div>
+      +1 is the strongest healthy synapse. Damage pulls weights toward 0; lost neurons leave blank rows and
+      columns. Hover a cell to read it.</div>
     <div class="wrow">
       <div class="wfig"><canvas id="wh" width="250" height="250"></canvas>
         <div class="wcap h"><b>Healthy</b><span>intact weights</span></div></div>
@@ -131,14 +131,14 @@ function flipAge(b, u, i) {               // time since neuron i last flipped (s
   }
   return Infinity;
 }
-function overlap(b, s) {                // m = (1/N) sum xi_i s_i with the target memory #1
-  let m = 0; for (let i = 0; i < N; i++) m += (b.alive[i] ? s[i] : 0) * D.target[i];
-  return m / N;
+function accuracy(b, s) {               // over all N: a lost neuron cannot fire, so it is silent
+  let ok = 0; for (let i = 0; i < N; i++) if ((b.alive[i] ? s[i] : -1) === D.target[i]) ok++;
+  return ok / N;
 }
 D.brains.forEach(b => {                   // precompute accuracy curve for sparklines
   b.nAlive = b.alive.reduce((x, y) => x + y, 0);
   b.curve = []; const steps = 30;
-  for (let q = 0; q <= K * steps; q++) b.curve.push(overlap(b, stateAt(b, q / steps)));
+  for (let q = 0; q <= K * steps; q++) b.curve.push(accuracy(b, stateAt(b, q / steps)));
 });
 
 // ---------- canvases
@@ -165,7 +165,7 @@ function drawGrid(cv, s, b, opts = {}) {
       ctx.strokeStyle = "rgba(255,107,138,0.55)"; ctx.lineWidth = 1; ctx.beginPath();
       ctx.moveTo(x + cw * .25, y + ch * .25); ctx.lineTo(x + cw * .75, y + ch * .75);
       ctx.moveTo(x + cw * .75, y + ch * .25); ctx.lineTo(x + cw * .25, y + ch * .75); ctx.stroke();
-    } else if (opts.stray && s[i] !== 0 && s[i] !== D.target[i]) {
+    } else if (opts.stray && s[i] > 0 && D.target[i] < 0) {
       ctx.strokeStyle = "#ff3d6e"; ctx.lineWidth = 2; ctx.strokeRect(x + 1.5, y + 1.5, cw - 3, ch - 3);
     } else if (opts.err && b && s[i] !== D.target[i]) {
       ctx.strokeStyle = "#ff3d6e"; ctx.lineWidth = 1.6; ctx.strokeRect(x + 1.2, y + 1.2, cw - 2.4, ch - 2.4);
@@ -206,7 +206,7 @@ function drawBrain(ctx, b, acc, accent) {
 const DISC = {x: 410, y: 145, r: 132};
 function nodeXY(i) { return [DISC.x + D.xy[i][0] * DISC.r, DISC.y + D.xy[i][1] * DISC.r]; }
 function drawCard(card, u) {
-  const b = card.b, s = stateAt(b, u), m = overlap(b, s), acc = (1 + m) / 2;
+  const b = card.b, s = stateAt(b, u), acc = accuracy(b, s);
   const [ctx, w, h] = setup(card.cv), sc = w / 560;
   ctx.clearRect(0, 0, w, h); ctx.save(); ctx.scale(sc, sc);
   const [hx, hy] = drawBrain(ctx, b, acc, b.accentRGB);
@@ -268,20 +268,20 @@ function drawCard(card, u) {
   ctx.restore();
   // bottom row
   drawGrid(card.grid, s, b, {err: showErr});
-  card.big.textContent = "m = " + (m < 0 ? "−" : "") + Math.abs(m).toFixed(2);
+  card.big.textContent = (acc * 100).toFixed(1) + "%";
   const settled = u >= b.sweeps && u > 0;
   card.badge.className = "badge" + (settled ? (b.success ? " ok" : " bad") : "");
   card.badge.textContent = u <= 0 ? "Cue presented" : !settled ? "Recalling…" : b.success ? "✓ Memory recalled" : "✗ Recall failed";
-  card.verdict.textContent = settled ? b.verdict : "overlap with memory #1 (success: m ≥ " + D.thr.toFixed(1) + ")";
+  card.verdict.textContent = settled ? b.verdict : "of the " + N + " neurons match the stored X";
   drawSpark(card, u);
 }
 function drawSpark(card, u) {
   const b = card.b, [ctx, w, h] = setup(card.spark), cv = b.curve, n = cv.length - 1;
   ctx.clearRect(0, 0, w, h);
-  const X = q => 2 + (w - 4) * q / Math.max(1, n), Y = a => h - 4 - (h - 8) * (a + 1) / 2;
+  const X = q => 2 + (w - 4) * q / Math.max(1, n), Y = a => h - 4 - (h - 8) * Math.max(0, (a - 0.4) / 0.6);
   ctx.strokeStyle = "rgba(255,255,255,0.18)"; ctx.setLineDash([3, 3]); ctx.beginPath();
   ctx.moveTo(0, Y(D.thr)); ctx.lineTo(w, Y(D.thr)); ctx.stroke(); ctx.setLineDash([]);
-  ctx.fillStyle = "#6f6a99"; ctx.font = "10px Inter, system-ui"; ctx.fillText("success m ≥ " + D.thr.toFixed(1), 4, Y(D.thr) - 3);
+  ctx.fillStyle = "#6f6a99"; ctx.font = "10px Inter, system-ui"; ctx.fillText("success " + Math.round(D.thr * 100) + "%", 4, Y(D.thr) - 3);
   ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.lineWidth = 1.5; ctx.beginPath();
   cv.forEach((a, q) => q ? ctx.lineTo(X(q), Y(a)) : ctx.moveTo(X(q), Y(a))); ctx.stroke();
   const upto = Math.min(n, Math.round(Math.max(0, u) / K * n));
@@ -319,13 +319,13 @@ const cards = D.brains.map((b, idx) => {
   return card;
 });
 const tip = document.getElementById("tip");
-const word = v => v > 0 ? "+1" : v < 0 ? "−1" : "0 (silent)";
+const word = v => v > 0 ? "firing" : v < 0 ? "silent" : "unknown";
 function setHover(i, ev, card) {
   hov = i;
   if (i < 0 || !ev) { tip.style.display = "none"; return; }
   const b = card.b, s = stateAt(b, uNow());
   tip.innerHTML = !b.alive[i] ? `neuron ${i}: <b>lost</b>` :
-    `neuron ${i}: <b>${word(s[i])}</b> · memory #1 says ${word(D.target[i])} ${s[i] === D.target[i] ? "✓" : "✗"}`;
+    `neuron ${i}: <b>${word(s[i])}</b> · memory says ${word(D.target[i])} ${s[i] === D.target[i] ? "✓" : "✗"}`;
   tip.style.display = "block"; tip.style.left = (ev.clientX + 12) + "px"; tip.style.top = (ev.clientY + 12) + "px";
 }
 // ---------- synaptic weight heatmaps (scale −1 … +1)
@@ -377,12 +377,6 @@ window.addEventListener("resize", drawAllWeights);
 drawGrid(document.getElementById("tgt"), D.target, null);
 drawGrid(document.getElementById("cue"), D.brains[0].states[0], null, {stray: true});
 document.getElementById("cuenote").innerHTML = D.cueNote;
-(D.others || []).forEach((p, k) => {
-  const d = document.createElement("div");
-  d.innerHTML = `<div class="lbl">Stored memory #${k + 2}</div><canvas width="240" height="240"></canvas>`;
-  document.getElementById("others").appendChild(d);
-  drawGrid(d.querySelector("canvas"), p, null);
-});
 
 // ---------- clock
 const uNow = () => Math.max(0, Math.min(K, (t - CUE_T) / SWEEP_T));
