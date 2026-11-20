@@ -5,6 +5,7 @@ strength and two drug toggles. The animation replays the network's real asynchro
 order (see ``ca3model.neurolab``), so every flip on screen happened in the simulation."""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -21,6 +22,10 @@ from ca3model.neurolab import (DONEPEZIL_CUE_GAIN, DONEPEZIL_RECOVERY, GRID,
 from .settings import Settings
 
 TEMPLATE = (Path(__file__).with_name("brain_view.html")).read_text(encoding="utf-8")
+# Part of the simulation cache key: any edit to this file or the template invalidates cached pages
+# (st.cache_data only hashes the cached function's own code, so text changes elsewhere, such as a
+# relabelled note, would otherwise keep being served from the cache after a hot redeploy).
+CODE_KEY = hashlib.sha256(Path(__file__).read_bytes() + TEMPLATE.encode()).hexdigest()[:16]
 HEALTHY_RGB = np.array([45, 212, 191])
 SICK_RGB = np.array([251, 113, 133])
 NOISE_MAX = 50
@@ -43,7 +48,7 @@ def _verdict(m: dict) -> str:
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
-def _simulate(args: tuple, mem: bool, noise_off: float) -> tuple[str, dict, dict]:
+def _simulate(args: tuple, mem: bool, noise_off: float, code_key: str = CODE_KEY) -> tuple[str, dict, dict]:
     """The animated run, the Monte Carlo recall at these settings, the four drug scenarios at the
     same brain settings (noise_off = input noise without memantine), and a healthy reference."""
     sev, noise, strength, done, mode, sweeps, thr, seed, conn = args
@@ -239,7 +244,7 @@ def render_neurolab(s: Settings) -> None:
             s.ret.success_threshold, s.exp.base_seed, conn)
     noise_off = _noise_without_memantine(round(noise * 100), mem) / 100
     with st.spinner("Running the brain…"):
-        html, scen, healthy = _simulate(args, bool(mem), noise_off)
+        html, scen, healthy = _simulate(args, bool(mem), noise_off, CODE_KEY)
     st.iframe(html, height="content")
     active = {(False, False): "none", (True, False): "done", (False, True): "mem",
               (True, True): "both"}[(bool(done), bool(mem))]
