@@ -138,3 +138,19 @@ def test_monte_carlo_trial_one_is_the_animated_run():
     run = run_stimulator(0.57, 0.4, 0.4, True)["brain"].metrics
     one = monte_carlo_recall(0.57, 0.4, 0.4, True, n_trials=1)
     assert one["recall"] == pytest.approx(run["accuracy"])
+
+
+@pytest.mark.parametrize("noise,donepezil", [(0.40, False), (0.20, False), (0.40, True), (0.20, True)])
+def test_animated_replay_is_a_typical_trial(noise, donepezil):
+    """The replay must not show a lucky trial: memantine's replay showed 96% next to a 69% mean."""
+    from ca3model.neurolab import monte_carlo_recall
+    mc = monte_carlo_recall(0.57, noise, 0.40, donepezil)
+    run = run_stimulator(0.57, noise, 0.40, donepezil, base_seed=12345 + mc["rep"])["brain"].metrics
+    assert run["accuracy"] == pytest.approx(mc["rep_accuracy"])
+    assert abs(run["accuracy"] - mc["recall"]) <= 0.06
+
+
+def test_memantine_replay_matches_its_modest_effect():
+    from ca3model.neurolab import monte_carlo_recall
+    mc = monte_carlo_recall(0.57, 0.20, 0.40, False)
+    assert mc["rep_accuracy"] < 0.75          # a typical memantine trial is not a full recall

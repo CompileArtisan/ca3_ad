@@ -56,7 +56,10 @@ def _simulate(args: tuple, mem: bool, noise_off: float) -> tuple[str, dict, dict
             sev, nz, strength, d, mode, sweeps, thr, seed, conn)
         scen[key] = {**scen[key], "noise": nz}
     healthy = monte_carlo_recall(0.0, noise, strength, False, mode, sweeps, thr, seed)
-    return _payload(run_stimulator(*args), args, mc, mem), scen, healthy
+    # Animate the most typical trial, not trial 1: a single lucky trial (e.g. one of memantine's
+    # ~15% full recalls) would otherwise show 96% next to a 69% average.
+    rep_args = args[:7] + (seed + mc["rep"],) + args[8:]
+    return _payload(run_stimulator(*rep_args), args, mc, mem), scen, healthy
 
 
 def _weight_matrix(W: np.ndarray, scale: float) -> list:
@@ -100,7 +103,7 @@ def _payload(r: dict, args: tuple, mc: dict, mem: bool) -> str:
         }],
         "cueNote": _cue_note(strength, noise, done),
         "mc": {"recall": mc["recall"], "lo": mc["lo"], "hi": mc["hi"], "recalled": mc["recalled"],
-               "n": mc["n"]},
+               "n": mc["n"], "rep": mc["rep"]},
         "weights": {"healthy": _weight_matrix(W_healthy, w_max),
                     "brain": _weight_matrix(b.weights, w_max),
                     "brainLabel": "This brain" + (" + donepezil" if done else ""),
@@ -257,8 +260,8 @@ def render_neurolab(s: Settings) -> None:
             "best.\n"
             "- **Recall** is a Monte Carlo estimate: the same settings are simulated on 1,000 "
             "random brains, cues and update orders, and the share of neurons that end up matching "
-            "the X is averaged. The animation replays trial 1 of those 1,000, so a single replay "
-            "can fail while the average is high, or the reverse.\n"
+            "the X is averaged. The animation replays the most typical of those 1,000 trials "
+            "(the one whose recall is closest to the average), so it shows what usually happens.\n"
             "- In the disc each dot is a neuron: **amber = firing**, **violet = silent**, hollow = "
             "not in the cue yet. Neurons update one at a time in the exact order the simulation "
             "used; a ring marks each change. Lines are a sample of synapses (the model is fully "

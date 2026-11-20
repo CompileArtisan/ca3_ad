@@ -37,8 +37,9 @@ Model (illustrative abstraction, not pharmacology):
 
 Monte Carlo (:func:`monte_carlo_recall`): every trial draws a fresh brain at the chosen severity
 (which synapses weaken, which neurons die), a fresh cue and a fresh update order, and reports
-recall = mean share of the 25 neurons that match the X once the network settles. Trial 1 is the
-run the animation replays. With the defaults (57% severity, 40% cue, 40% input noise) it lands
+recall = mean share of the 25 neurons that match the X once the network settles. The animation
+replays the most typical trial (the one whose recall is closest to the average), so a lucky or
+unlucky single trial cannot misrepresent the scenario. With the defaults (57% severity, 40% cue, 40% input noise) it lands
 near 64% / 96% / 69% / 98% for none / donepezil / memantine / both. These are outputs of this toy
 model with parameters chosen for teaching, not clinical efficacy figures.
 
@@ -322,9 +323,10 @@ def monte_carlo_recall(severity: float, noise: float, strength: float, donepezil
                        base_seed: int = 12345, connectivity: float | None = None,
                        n_trials: int = MC_TRIALS) -> dict:
     """Monte Carlo recall: trial k is :func:`run_stimulator` with seed ``base_seed + k`` (a fresh
-    damage draw, cue and update order), so trial 0 is the animated run. Returns the mean
-    accuracy (share of the 25 neurons matching the X after settling) with a 95% CI, and how many
-    trials met the success threshold."""
+    damage draw, cue and update order). Returns the mean accuracy (share of the 25 neurons
+    matching the X after settling) with a 95% CI, how many trials met the success threshold, and
+    ``rep``: the index of the trial whose accuracy is closest to the mean (the first such trial),
+    which is the run to animate (``run_stimulator(..., base_seed=base_seed + rep)``)."""
     target = memory_pattern()
     s_eff = effective_cue_strength(strength, donepezil)
     acc = np.empty(n_trials)
@@ -340,4 +342,6 @@ def monte_carlo_recall(severity: float, noise: float, strength: float, donepezil
         ok += m["success"]
     mean = float(acc.mean())
     half = float(1.96 * acc.std(ddof=1) / np.sqrt(n_trials)) if n_trials > 1 else 0.0
-    return {"recall": mean, "lo": mean - half, "hi": mean + half, "recalled": ok, "n": n_trials}
+    rep = int(np.argmin(np.abs(acc - mean)))
+    return {"recall": mean, "lo": mean - half, "hi": mean + half, "recalled": ok, "n": n_trials,
+            "rep": rep, "rep_accuracy": float(acc[rep])}

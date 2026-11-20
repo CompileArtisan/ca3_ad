@@ -306,7 +306,7 @@ const cards = D.brains.map((b, idx) => {
     <div class="bottom">
       <div class="mc"><div class="lbl">Recall · Monte Carlo</div><div class="big">${(D.mc.recall * 100).toFixed(1)}%</div>
         <div class="sub">mean of ${D.mc.n.toLocaleString()} trials · 95% CI ${(D.mc.lo * 100).toFixed(1)}–${(D.mc.hi * 100).toFixed(1)}%</div></div>
-      <div><div class="lbl">This replay (trial 1)</div><div class="big live">–</div><div class="sub verdict"></div></div>
+      <div><div class="lbl">This replay · typical trial #${D.mc.rep + 1}</div><div class="big live">–</div><div class="sub verdict"></div></div>
       <div class="sp"><canvas class="spark"></canvas>
       <div class="chips">${b.chips.map(c => `<span class="chip">${c}</span>`).join("")}</div></div></div>`;
   document.getElementById("cards").appendChild(el);
