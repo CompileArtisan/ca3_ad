@@ -21,7 +21,7 @@ Model (illustrative abstraction, not pharmacology):
   damage     W_eff = W * E * alive_i * alive_j
              E from :func:`connectivity_efficacy` with connectivity
              c = 1 - SYNAPSE_LOSS_AT_MAX * severity, plus NEURON_LOSS_AT_MAX * severity * N
-             dead neurons, rounded up or down at random per brain (2-3 of 25 at 100% severity:
+             dead neurons, rounded up or down at random per brain (1-2 of 25 at 100% severity:
              synapse loss does most of the damage).
              The simulator uses attenuation (every synapse weakened by a random amount): with
              all-or-none deletion a single 25-neuron brain declines in lumpy cliffs.
@@ -30,7 +30,7 @@ Model (illustrative abstraction, not pharmacology):
   cue        strength k: round(k * 9) of the X's 9 neurons fire; noise q: round(q * 16) of the
              16 other neurons fire as well (stray input). Everything else starts silent.
   recall     correct if the settled state matches the X on >= threshold of all 25 neurons
-             (a lost neuron cannot fire, so it counts as silent)
+             (a lost neuron can neither fire nor be correctly silent, so it scores half)
   donepezil  recovers DONEPEZIL_RECOVERY of the lost synaptic efficacy on surviving neurons and
              multiplies cue strength by DONEPEZIL_CUE_GAIN (cholinergic boost to the cue signal)
   memantine  halves input noise (the UI moves the Input noise slider); fewer stray neurons fire in
@@ -68,10 +68,11 @@ N_NEURONS = GRID[0] * GRID[1]
 
 THRESHOLD_SYNAPSES = 1.75    # firing threshold, in units of one healthy memory-memory synapse
 SYNAPSE_LOSS_AT_MAX = 0.9    # share of synaptic strength lost at 100% severity
-NEURON_LOSS_AT_MAX = 0.10    # share of neurons lost at 100% severity (expected count)
-DONEPEZIL_RECOVERY = 0.5     # fraction of lost efficacy restored
+NEURON_LOSS_AT_MAX = 0.07    # share of neurons lost at 100% severity (expected count)
+DONEPEZIL_RECOVERY = 0.45    # fraction of lost efficacy restored
 DONEPEZIL_CUE_GAIN = 2.25    # cue strength multiplier (capped at 100%)
 MEMANTINE_NOISE_REDUCTION = 0.5  # fraction of input noise removed (applied by the UI)
+LOST_NEURON_CREDIT = 0.5     # recall credit for a lost neuron (neither right nor wrong)
 SIMULATOR_MODE = "attenuation"
 GOLDEN_ANGLE = np.pi * (3.0 - np.sqrt(5.0))
 EDGE_NEIGHBOURS = 4
@@ -235,7 +236,8 @@ def score(final: np.ndarray, alive: np.ndarray, target: np.ndarray, threshold: f
           converged: bool) -> dict:
     shown = np.where(alive & (final > 0), 1, -1)
     on = target > 0
-    acc = float(np.mean(shown == target))
+    # a lost neuron can neither fire for the memory nor stay correctly silent: half credit
+    acc = float(np.mean(np.where(alive, (shown == target).astype(float), LOST_NEURON_CREDIT)))
     hit, stray = int((shown[on] > 0).sum()), int((shown[~on] > 0).sum())
     if not converged:
         kind = "unsettled"
