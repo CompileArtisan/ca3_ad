@@ -36,7 +36,7 @@ One brain, one stored memory (an X on a 5x5 grid of 25 model neurons). Model in 
   drive. A healthy brain completes the X from a 40% cue; a moderately damaged one often cannot.
   (The analysis tabs use zero-threshold sign dynamics, where uniform weakening never changes recall; that is
   why the old simulator showed a damaged brain recalling perfectly.)
-- **Cue strength** = share of the X's 9 neurons lit; **input noise** = share of the other 16 lit by mistake.
+- **Clue strength** = share of the X's 9 neurons lit; **input noise** = share of the other 16 lit by mistake.
 - **Donepezil** restores 50% of lost synaptic strength; **memantine** halves input noise (the slider moves).
 
 ## Layout

@@ -115,7 +115,7 @@ def _payload(r: dict, args: tuple, mc: dict, mem: bool) -> str:
 def _cue_note(strength: float, noise: float, donepezil: bool = False) -> str:
     eff = effective_cue_strength(strength, donepezil)
     lit, n_on, stray, n_off = cue_counts(eff, noise)
-    note = f"{lit} of the X's {n_on} neurons lit ({strength:.0%} cue strength"
+    note = f"{lit} of the X's {n_on} neurons lit ({strength:.0%} clue strength"
     note += f", ×{DONEPEZIL_CUE_GAIN:g} with donepezil)" if donepezil else ")"
     if stray:
         note += f", plus {stray} of the other {n_off} firing by mistake ({noise:.0%} input noise)"
@@ -176,7 +176,7 @@ def _controls() -> tuple[float, float, float, float, bool, bool]:
                                "Memantine halves it.") / 100
         if ss.get("nl_mem") and "nl_noise_before_mem" in ss:
             c2.caption(f"Memantine: {ss['nl_noise_before_mem']}% → {ss['nl_noise']}%")
-        strength = c3.slider("Cue strength", 10, 100, 40, 10, format="%d%%", key="nl_cue",
+        strength = c3.slider("Clue strength", 10, 100, 40, 10, format="%d%%", key="nl_cue",
                              help="Share of the X's 9 neurons lit in the cue; the rest of the "
                                   "memory starts silent.") / 100
         with c4:
@@ -184,7 +184,7 @@ def _controls() -> tuple[float, float, float, float, bool, bool]:
             done = st.toggle("Donepezil", key="nl_done",
                              help=f"AChE inhibitor, modelled as restoring {DONEPEZIL_RECOVERY:.0%} "
                                   "of the lost synaptic strength on surviving neurons and "
-                                  f"multiplying cue strength by {DONEPEZIL_CUE_GAIN:g} (stronger "
+                                  f"multiplying clue strength by {DONEPEZIL_CUE_GAIN:g} (stronger "
                                   "cholinergic cue signal).")
             mem = st.toggle("Memantine", key="nl_mem", on_change=_on_memantine,
                             help=f"NMDA antagonist, modelled as cutting input noise by "
