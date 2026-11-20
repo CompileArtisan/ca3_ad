@@ -273,11 +273,13 @@ function drawCard(card, u) {
   ctx.restore();
   // bottom row
   drawGrid(card.grid, s, b, {err: showErr});
-  card.big.textContent = (acc * 100).toFixed(1) + "%";
+  // one trial can only be scored in whole neurons, so it is shown as a count, not a percentage:
+  // the recall percentage is the Monte Carlo average beside it
+  card.big.textContent = Math.round(acc * N) + " / " + N;
   const settled = u >= b.sweeps && u > 0;
   card.badge.className = "badge" + (settled ? (b.success ? " ok" : " bad") : "");
   card.badge.textContent = u <= 0 ? "Cue presented" : !settled ? "Recalling…" : b.success ? "✓ Memory recalled" : "✗ Recall failed";
-  card.verdict.textContent = settled ? b.verdict : "of the " + N + " neurons match the stored X";
+  card.verdict.textContent = settled ? b.verdict : "neurons match the stored X";
   document.getElementById("retnote").textContent = u <= 0 ? "Press Play or Step to start recall." :
     !settled ? "Recalling…" : (b.success ? "✓ " : "✗ ") + b.verdict;
   drawSpark(card, u);
@@ -306,7 +308,7 @@ const cards = D.brains.map((b, idx) => {
     <div class="bottom">
       <div class="mc"><div class="lbl">Recall · Monte Carlo</div><div class="big">${(D.mc.recall * 100).toFixed(1)}%</div>
         <div class="sub">mean of ${D.mc.n.toLocaleString()} trials · 95% CI ${(D.mc.lo * 100).toFixed(1)}–${(D.mc.hi * 100).toFixed(1)}%</div></div>
-      <div><div class="lbl">This replay · typical trial #${D.mc.rep + 1}</div><div class="big live">–</div><div class="sub verdict"></div></div>
+      <div><div class="lbl">Neurons matching · replay of typical trial #${D.mc.rep + 1}</div><div class="big live">–</div><div class="sub verdict"></div></div>
       <div class="sp"><canvas class="spark"></canvas>
       <div class="chips">${b.chips.map(c => `<span class="chip">${c}</span>`).join("")}</div></div></div>`;
   document.getElementById("cards").appendChild(el);

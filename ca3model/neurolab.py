@@ -20,8 +20,9 @@ Model (illustrative abstraction, not pharmacology):
   weights    W_ij = (xi_i - a)(xi_j - a) / N,  W_ii = 0   (covariance Hebbian rule)
   damage     W_eff = W * E * alive_i * alive_j
              E from :func:`connectivity_efficacy` with connectivity
-             c = 1 - SYNAPSE_LOSS_AT_MAX * severity, plus round(NEURON_LOSS_AT_MAX * severity * N)
-             dead neurons (at most 2 of 25: synapse loss does most of the damage).
+             c = 1 - SYNAPSE_LOSS_AT_MAX * severity, plus NEURON_LOSS_AT_MAX * severity * N
+             dead neurons, rounded up or down at random per brain (2-3 of 25 at 100% severity:
+             synapse loss does most of the damage).
              The simulator uses attenuation (every synapse weakened by a random amount): with
              all-or-none deletion a single 25-neuron brain declines in lumpy cliffs.
   dynamics   asynchronous; V_i <- 1 if h_i > theta, 0 if h_i < theta, unchanged on a tie,
@@ -67,9 +68,9 @@ N_NEURONS = GRID[0] * GRID[1]
 
 THRESHOLD_SYNAPSES = 1.75    # firing threshold, in units of one healthy memory-memory synapse
 SYNAPSE_LOSS_AT_MAX = 0.9    # share of synaptic strength lost at 100% severity
-NEURON_LOSS_AT_MAX = 0.08    # share of neurons lost at 100% severity
-DONEPEZIL_RECOVERY = 0.75    # fraction of lost efficacy restored
-DONEPEZIL_CUE_GAIN = 2.0     # cue strength multiplier (capped at 100%)
+NEURON_LOSS_AT_MAX = 0.10    # share of neurons lost at 100% severity (expected count)
+DONEPEZIL_RECOVERY = 0.5     # fraction of lost efficacy restored
+DONEPEZIL_CUE_GAIN = 2.25    # cue strength multiplier (capped at 100%)
 MEMANTINE_NOISE_REDUCTION = 0.5  # fraction of input noise removed (applied by the UI)
 SIMULATOR_MODE = "attenuation"
 GOLDEN_ANGLE = np.pi * (3.0 - np.sqrt(5.0))
@@ -157,6 +158,15 @@ def firing_threshold(pattern: np.ndarray) -> float:
     return THRESHOLD_SYNAPSES * (1.0 - a) ** 2 / pattern.size
 
 
+def n_lost_neurons(loss: float, base_seed: int) -> int:
+    """How many of the 25 neurons die: loss * N with stochastic rounding (floor(loss * N + u),
+    u ~ U(0,1) fixed per brain seed). The expected count is exactly loss * N, so the Monte Carlo
+    average is not pinned to one integer, and a fixed seed still loses a superset of neurons as
+    severity rises."""
+    u = np.random.default_rng([base_seed & 0xFFFFFFFF, 77]).random()
+    return int(np.floor(loss * N_NEURONS + u))
+
+
 @dataclass
 class Brain:
     W: np.ndarray            # learned weights (healthy)
@@ -194,7 +204,7 @@ def make_brain(severity: float, donepezil: bool = False, mode: str = SIMULATOR_M
         E = E + DONEPEZIL_RECOVERY * (1.0 - E)
         np.fill_diagonal(E, 0.0)
     alive = np.ones(N_NEURONS, dtype=bool)
-    alive[draw.neuron_order[: _half_up(loss * N_NEURONS)]] = False
+    alive[draw.neuron_order[: n_lost_neurons(loss, base_seed)]] = False
     return Brain(covariance_weights(pattern), E, alive, firing_threshold(pattern), conn, loss)
 
 

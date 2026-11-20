@@ -127,10 +127,10 @@ def test_drug_scenarios_hit_the_monte_carlo_targets(seed):
     done, both = _mc(0.40, True, seed), _mc(0.20, True, seed)
     assert 63.5 <= base <= 66.0          # ~64%: the damaged brain mostly goes silent
     assert 68.0 <= mem <= 71.0           # memantine: noise 40% -> 20% lifts recall modestly
-    assert 94.5 <= done <= 97.5          # donepezil: ~96%
-    assert 97.5 <= both <= 99.5          # combination: ~98%
+    assert 95.0 <= done <= 97.0          # donepezil: ~96%
+    assert 97.3 <= both <= 98.5          # combination: ~98%
     assert mem - base >= 3.0             # memantine has its own effect on recall
-    assert both - done >= 1.0            # combination beats donepezil alone
+    assert 1.0 <= both - done <= 2.5     # combination beats donepezil alone by ~1-2 pts
 
 
 def test_monte_carlo_trial_one_is_the_animated_run():
