@@ -31,6 +31,16 @@ header[data-testid="stHeader"]{background:transparent}
 .nl-track i{display:block;height:100%;border-radius:99px}
 .nl-track i{background:var(--acc,#a78bfa)}
 .nl-rel small{grid-column:1/-1;color:#9a94c7;font-size:.8rem}
+.nl-scs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.6rem;margin-bottom:.4rem}
+@media (max-width:900px){.nl-scs{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.nl-sc{background:#15122b;border:1px solid #2a2650;border-radius:14px;padding:.6rem .8rem;
+  display:grid;grid-template-columns:1fr auto;gap:.3rem .5rem;align-items:baseline}
+.nl-sc.on{border-color:var(--acc,#a78bfa);box-shadow:0 0 0 1px var(--acc,#a78bfa) inset}
+.nl-sc span{color:#c9c4ef;grid-column:1/-1;font-size:.85rem}
+.nl-sc b{font-size:1.5rem;font-variant-numeric:tabular-nums;color:#ece9ff}
+.nl-sc em{font-style:normal;color:#34d399;font-size:.85rem;font-variant-numeric:tabular-nums}
+.nl-sc small{grid-column:1/-1;color:#9a94c7;font-size:.72rem}
+.nl-sc .nl-track{height:5px}
 iframe{border-radius:16px}
 </style>
 """

@@ -35,7 +35,7 @@ def test_every_heavy_suite_runs_from_the_ui():
 
 def test_one_brain_with_severity_and_connectivity_sliders_and_renamed_title():
     at = AppTest.from_file(APP, default_timeout=120).run()
-    assert _slider(at, "Alzheimer's severity").value == 65
+    assert _slider(at, "Alzheimer's severity").value == 57
     assert any(s.label.startswith("Synaptic connectivity") for s in at.slider)
     assert any("RECALL4" in h.body for h in at.html if hasattr(h, "body"))
 
@@ -53,7 +53,7 @@ def test_memantine_moves_input_noise_down_and_back():
 
 def test_connectivity_and_severity_sliders_are_linked():
     at = AppTest.from_file(APP, default_timeout=120).run()
-    assert _slider(at, "Synaptic connectivity").value == 42      # 65% severity -> 100 - 0.9*65
+    assert _slider(at, "Synaptic connectivity").value == 49      # 57% severity -> 100 - 0.9*57
     _slider(at, "Alzheimer's severity").set_value(0).run()
     assert _slider(at, "Synaptic connectivity").value == 100
     _slider(at, "Synaptic connectivity").set_value(55).run()

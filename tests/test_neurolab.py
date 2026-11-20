@@ -109,3 +109,32 @@ def test_connectivity_override_sets_mean_synaptic_efficacy():
     assert make_brain(0.3).efficacy[off].mean() == pytest.approx(severity_damage(0.3)[0], abs=0.08)
     for sev in range(0, 101, 5):
         assert severity_for_connectivity(connectivity_for_severity(sev)) == pytest.approx(sev, abs=1)
+
+
+# ---- drug scenarios at the simulator defaults (57% severity, 40% cue, 40% input noise) ----
+DEFAULTS = dict(severity=0.57, strength=0.40)
+
+
+def _mc(noise, donepezil, seed=12345):
+    from ca3model.neurolab import monte_carlo_recall
+    return 100 * monte_carlo_recall(DEFAULTS["severity"], noise, DEFAULTS["strength"], donepezil,
+                                    base_seed=seed)["recall"]
+
+
+@pytest.mark.parametrize("seed", [12345, 1, 777])
+def test_drug_scenarios_hit_the_monte_carlo_targets(seed):
+    base, mem = _mc(0.40, False, seed), _mc(0.20, False, seed)
+    done, both = _mc(0.40, True, seed), _mc(0.20, True, seed)
+    assert 63.5 <= base <= 66.0          # ~64%: the damaged brain mostly goes silent
+    assert 68.0 <= mem <= 71.0           # memantine: noise 40% -> 20% lifts recall modestly
+    assert 94.5 <= done <= 97.5          # donepezil: ~96%
+    assert 97.5 <= both <= 99.5          # combination: ~98%
+    assert mem - base >= 3.0             # memantine has its own effect on recall
+    assert both - done >= 1.0            # combination beats donepezil alone
+
+
+def test_monte_carlo_trial_one_is_the_animated_run():
+    from ca3model.neurolab import monte_carlo_recall
+    run = run_stimulator(0.57, 0.4, 0.4, True)["brain"].metrics
+    one = monte_carlo_recall(0.57, 0.4, 0.4, True, n_trials=1)
+    assert one["recall"] == pytest.approx(run["accuracy"])

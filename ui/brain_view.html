@@ -10,7 +10,9 @@ html,body{margin:0;background:transparent;color:var(--text);
 .bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 10px}
 .btn{background:var(--card);border:1px solid var(--line);color:var(--text);border-radius:10px;
   height:32px;min-width:38px;padding:0 10px;cursor:pointer;font-size:13px}
-.btn:hover{border-color:#5b4fd6}
+.btn:hover:not(:disabled){border-color:#5b4fd6}
+.btn:disabled{opacity:.4;cursor:default}
+.btn.on{border-color:#a78bfa;background:#221d47}
 #scrub{flex:1;min-width:160px;accent-color:#a78bfa}
 #phase{min-width:150px;font-variant-numeric:tabular-nums;color:var(--muted)}
 #phase b{color:var(--text)}
@@ -24,6 +26,8 @@ label.chk{color:var(--muted);display:flex;align-items:center;gap:6px;cursor:poin
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px}
 .mem{display:flex;flex-direction:column;gap:6px}
 .mem canvas{width:140px;height:140px;border-radius:8px}
+.retr .lbl{color:var(--text)}
+.retr canvas{box-shadow:0 0 0 1px var(--line)}
 .lbl{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .note{font-size:11px;color:var(--muted);line-height:1.4}
 .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
@@ -33,8 +37,9 @@ label.chk{color:var(--muted);display:flex;align-items:center;gap:6px;cursor:poin
 .badge.ok{color:var(--ok);border-color:rgba(52,211,153,.45);background:rgba(52,211,153,.08)}
 .badge.bad{color:var(--bad);border-color:rgba(251,113,133,.45);background:rgba(251,113,133,.08)}
 canvas.brain{width:100%;aspect-ratio:560/290;display:block}
-.bottom{display:grid;grid-template-columns:140px 1fr;gap:12px;align-items:start;margin-top:4px}
-.bottom canvas.grid{width:140px;height:140px;border-radius:8px}
+.bottom{display:grid;grid-template-columns:auto auto 1fr;gap:18px;align-items:start;margin-top:2px}
+@media (max-width:600px){.bottom{grid-template-columns:1fr 1fr}.bottom .sp{grid-column:1/-1}}
+.mc .big{color:#ffc94a}
 .big{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
 .sub{color:var(--muted);font-size:11px;margin:2px 0 6px}
 canvas.spark{width:100%;height:46px;display:block}
@@ -62,8 +67,11 @@ canvas.spark{width:100%;height:46px;display:block}
   padding:5px 8px;font-size:12px;display:none;z-index:9}
 </style></head><body>
 <div class="bar">
-  <button class="btn" id="play" title="Play / pause">❚❚</button>
-  <button class="btn" id="restart" title="Replay from the cue">↺</button>
+  <button class="btn" id="play" title="Play (space)">▶ Play</button>
+  <button class="btn" id="pause" title="Pause (space)" disabled>❚❚ Pause</button>
+  <button class="btn" id="back" title="Step backward one sweep (←)">⏮ Step</button>
+  <button class="btn" id="fwd" title="Step forward one sweep (→)">Step ⏭</button>
+  <button class="btn" id="reset" title="Back to the cue">↺ Reset</button>
   <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Timeline">
   <span id="phase"></span>
   <label class="chk"><input type="checkbox" id="err"> mark wrong neurons</label>
@@ -82,6 +90,8 @@ canvas.spark{width:100%;height:46px;display:block}
   <div class="card mem">
     <div><div class="lbl">Stored memory · X</div><canvas id="tgt" width="240" height="240"></canvas></div>
     <div><div class="lbl">Cue shown</div><canvas id="cue" width="240" height="240"></canvas></div>
+    <div class="retr"><div class="lbl">Memory retrieved</div><canvas id="ret" width="240" height="240"></canvas>
+      <div class="note" id="retnote"></div></div>
     <div class="note" id="cuenote"></div>
   </div>
   <div id="cards" style="display:contents"></div>
@@ -107,10 +117,9 @@ const D = __DATA__;
 const N = D.n, GH = D.grid[0], GW = D.grid[1];
 const COL = {fire:"#ffc94a", silent:"#7563e0", unk:"#5d5a80", dead:"#ff6b8a", agree:"143,211,255",
              conflict:"255,107,138", ghost:"rgba(160,120,170,0.18)"};
-const CUE_T = 1.4, SWEEP_T = 1.5, HOLD_T = 3.0;
+const CUE_T = 1.4, SWEEP_T = 1.5;
 const K = Math.max(...D.brains.map(b => b.sweeps));
-const TOTAL = CUE_T + K * SWEEP_T + HOLD_T;
-let t = 0, playing = true, last = performance.now(), hov = -1, showErr = false;
+let t = 0, playing = false, last = performance.now(), hov = -1, showErr = false;
 
 // ---------- state at "sweep time" u in [0, K]
 function stateAt(b, u) {
@@ -149,7 +158,6 @@ function setup(cv) {
   }
   const ctx = cv.getContext("2d"); ctx.setTransform(r, 0, 0, r, 0, 0); return [ctx, w, h];
 }
-const SUB = 3;                           // 5x5 neurons shown as a 15x15 grid (same values)
 function drawGrid(cv, s, b, opts = {}) {
   const [ctx, w, h] = setup(cv), cw = w / GW, ch = h / GH;
   ctx.fillStyle = "#0b0918"; ctx.fillRect(0, 0, w, h);
@@ -157,10 +165,7 @@ function drawGrid(cv, s, b, opts = {}) {
     const x = (i % GW) * cw, y = Math.floor(i / GW) * ch;
     const dead = b && !b.alive[i];
     ctx.fillStyle = dead ? "#1b1828" : s[i] > 0 ? COL.fire : s[i] < 0 ? COL.silent : "#2a2745";
-    // display only: each neuron is drawn as a SUB x SUB block of identical sub-squares
-    const sw = (cw - 1) / SUB, sh = (ch - 1) / SUB;
-    for (let a = 0; a < SUB; a++) for (let c = 0; c < SUB; c++)
-      ctx.fillRect(x + 0.5 + c * sw + 0.3, y + 0.5 + a * sh + 0.3, sw - 0.6, sh - 0.6);
+    ctx.fillRect(x + 1.5, y + 1.5, cw - 3, ch - 3);     // one cell per neuron: 5 x 5 = 25 cells
     if (dead) {
       ctx.strokeStyle = "rgba(255,107,138,0.55)"; ctx.lineWidth = 1; ctx.beginPath();
       ctx.moveTo(x + cw * .25, y + ch * .25); ctx.lineTo(x + cw * .75, y + ch * .75);
@@ -273,6 +278,8 @@ function drawCard(card, u) {
   card.badge.className = "badge" + (settled ? (b.success ? " ok" : " bad") : "");
   card.badge.textContent = u <= 0 ? "Cue presented" : !settled ? "Recalling…" : b.success ? "✓ Memory recalled" : "✗ Recall failed";
   card.verdict.textContent = settled ? b.verdict : "of the " + N + " neurons match the stored X";
+  document.getElementById("retnote").textContent = u <= 0 ? "Press Play or Step to start recall." :
+    !settled ? "Recalling…" : (b.success ? "✓ " : "✗ ") + b.verdict;
   drawSpark(card, u);
 }
 function drawSpark(card, u) {
@@ -296,12 +303,15 @@ const cards = D.brains.map((b, idx) => {
   const el = document.createElement("div"); el.className = "card";
   el.innerHTML = `<div class="head"><div class="title">${b.title}</div><div class="badge">…</div></div>
     <canvas class="brain"></canvas>
-    <div class="bottom"><div><div class="lbl">What it recalls</div><canvas class="grid"></canvas></div>
-      <div><div class="big">–</div><div class="sub verdict"></div><canvas class="spark"></canvas>
+    <div class="bottom">
+      <div class="mc"><div class="lbl">Recall · Monte Carlo</div><div class="big">${(D.mc.recall * 100).toFixed(1)}%</div>
+        <div class="sub">mean of ${D.mc.n.toLocaleString()} trials · 95% CI ${(D.mc.lo * 100).toFixed(1)}–${(D.mc.hi * 100).toFixed(1)}%</div></div>
+      <div><div class="lbl">This replay (trial 1)</div><div class="big live">–</div><div class="sub verdict"></div></div>
+      <div class="sp"><canvas class="spark"></canvas>
       <div class="chips">${b.chips.map(c => `<span class="chip">${c}</span>`).join("")}</div></div></div>`;
   document.getElementById("cards").appendChild(el);
-  const card = {b, el, cv: el.querySelector("canvas.brain"), grid: el.querySelector("canvas.grid"),
-    spark: el.querySelector("canvas.spark"), big: el.querySelector(".big"), badge: el.querySelector(".badge"),
+  const card = {b, el, cv: el.querySelector("canvas.brain"), grid: document.getElementById("ret"),
+    spark: el.querySelector("canvas.spark"), big: el.querySelector(".big.live"), badge: el.querySelector(".badge"),
     verdict: el.querySelector(".verdict")};
   card.cv.addEventListener("mousemove", ev => {
     const r = card.cv.getBoundingClientRect(), sc = r.width / 560;
@@ -321,7 +331,8 @@ const cards = D.brains.map((b, idx) => {
 const tip = document.getElementById("tip");
 const word = v => v > 0 ? "firing" : v < 0 ? "silent" : "unknown";
 function setHover(i, ev, card) {
-  hov = i;
+  const changed = hov !== i; hov = i;
+  if (changed && !playing && typeof render === "function") render();
   if (i < 0 || !ev) { tip.style.display = "none"; return; }
   const b = card.b, s = stateAt(b, uNow());
   tip.innerHTML = !b.alive[i] ? `neuron ${i}: <b>lost</b>` :
@@ -378,25 +389,75 @@ drawGrid(document.getElementById("tgt"), D.target, null);
 drawGrid(document.getElementById("cue"), D.brains[0].states[0], null, {stray: true});
 document.getElementById("cuenote").innerHTML = D.cueNote;
 
-// ---------- clock
+// ---------- clock: user-controlled playback, starts paused on the cue, never loops
+// Frames are the cue (frame 0) and the state after each sweep (frames 1..K). Between frames the
+// animation replays the neuron updates in the simulation's own order.
+const FRAME_T = f => f <= 0 ? 0 : CUE_T + f * SWEEP_T;
+const END = FRAME_T(K) + 0.6;            // let the last flip rings fade, then stop
+let tPlay = 0;
 const uNow = () => Math.max(0, Math.min(K, (t - CUE_T) / SWEEP_T));
+function frameIndex() { for (let f = K; f >= 0; f--) if (t >= FRAME_T(f) - 1e-6) return f; return 0; }
 function phase() {
-  const u = uNow(), el = document.getElementById("phase");
-  if (t < CUE_T) el.innerHTML = "<b>Cue presented</b>";
+  const u = uNow(), el = document.getElementById("phase"), f = frameIndex();
+  const step = ` · step ${f} of ${K}`;
+  if (t <= 0) el.innerHTML = `<b>Cue presented</b> · step 0 of ${K}`;
+  else if (t < CUE_T) el.innerHTML = `<b>Cue presented</b>` + step;
+  else if (f > 0 && f < K && Math.abs(t - FRAME_T(f)) < 1e-6)
+    el.innerHTML = `<b>After sweep ${f}</b> of ${K}` + step;
   else if (u < K) el.innerHTML = `<b>Sweep ${Math.floor(u) + 1}</b> of ${K} · neurons updating`;
-  else el.innerHTML = "<b>Settled</b> · network has stopped changing";
+  else el.innerHTML = `<b>Settled</b> after ${K} sweep${K === 1 ? "" : "s"}` + step;
+}
+const playBtn = document.getElementById("play"), pauseBtn = document.getElementById("pause");
+const scrub = document.getElementById("scrub");
+function sync() {
+  playBtn.disabled = playing; pauseBtn.disabled = !playing;
+  playBtn.classList.toggle("on", playing);
+  playBtn.textContent = t >= END - 1e-6 && !playing ? "▶ Replay" : "▶ Play";
+  document.getElementById("back").disabled = t <= 0;
+  document.getElementById("fwd").disabled = t >= FRAME_T(K) - 1e-6;
+  scrub.value = Math.round(t / END * 1000);
+}
+function render() {
+  const u = t < CUE_T ? 0 : uNow();
+  cards.forEach(c => drawCard(c, u)); phase(); sync();
 }
 function frame(now) {
-  const dt = (now - last) / 1000; last = now;
-  if (playing) { t += dt; if (t > TOTAL) t = 0; document.getElementById("scrub").value = Math.round(t / TOTAL * 1000); }
-  const u = t < CUE_T ? 0 : uNow();
-  cards.forEach(c => drawCard(c, u)); phase();
-  requestAnimationFrame(frame);
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (playing) {
+    t += dt;
+    if (t >= END) { t = END; playing = false; }         // stop at the final frame, no loop
+    render();
+  }
+  if (playing) requestAnimationFrame(frame);
 }
-const playBtn = document.getElementById("play");
-playBtn.onclick = () => { playing = !playing; playBtn.textContent = playing ? "❚❚" : "▶"; };
-document.getElementById("restart").onclick = () => { t = 0; playing = true; playBtn.textContent = "❚❚"; };
-document.getElementById("scrub").oninput = e => { t = e.target.value / 1000 * TOTAL; playing = false; playBtn.textContent = "▶"; };
-document.getElementById("err").onchange = e => { showErr = e.target.checked; };
-requestAnimationFrame(frame);
+function play() {
+  if (playing) return;
+  if (t >= END - 1e-6) t = 0;                           // Replay from the cue (user action only)
+  playing = true; last = performance.now(); render(); requestAnimationFrame(frame);
+}
+function pause() { playing = false; render(); }
+function stepTo(f) { playing = false; t = FRAME_T(Math.max(0, Math.min(K, f))); render(); }
+function stepFwd() {
+  let f = 0; while (f <= K && FRAME_T(f) <= t + 1e-6) f++;
+  stepTo(Math.min(K, f));
+}
+function stepBack() {
+  let f = K; while (f >= 0 && FRAME_T(f) >= t - 1e-6) f--;
+  stepTo(Math.max(0, f));
+}
+playBtn.onclick = play;
+pauseBtn.onclick = pause;
+document.getElementById("fwd").onclick = stepFwd;
+document.getElementById("back").onclick = stepBack;
+document.getElementById("reset").onclick = () => { playing = false; t = 0; render(); };
+scrub.oninput = e => { playing = false; t = e.target.value / 1000 * END; render(); };
+document.getElementById("err").onchange = e => { showErr = e.target.checked; render(); };
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" && e.target.type !== "checkbox") return;
+  if (e.key === " ") { e.preventDefault(); playing ? pause() : play(); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); stepFwd(); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); stepBack(); }
+});
+window.addEventListener("resize", render);
+render();
 </script></body></html>

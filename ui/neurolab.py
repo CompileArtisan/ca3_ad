@@ -11,11 +11,12 @@ from pathlib import Path
 import numpy as np
 import streamlit as st
 
-from ca3model.neurolab import (DONEPEZIL_RECOVERY, GRID, MEMANTINE_NOISE_REDUCTION,
-                               NEURON_LOSS_AT_MAX, SIMULATOR_MODE, SYNAPSE_LOSS_AT_MAX,
-                               connectivity_for_severity, covariance_weights,
-                               cue_counts, memory_pattern,
-                               severity_for_connectivity, neuron_layout, recall_reliability, run_stimulator)
+from ca3model.neurolab import (DONEPEZIL_CUE_GAIN, DONEPEZIL_RECOVERY, GRID,
+                               MEMANTINE_NOISE_REDUCTION, NEURON_LOSS_AT_MAX, SIMULATOR_MODE,
+                               SYNAPSE_LOSS_AT_MAX, connectivity_for_severity, covariance_weights,
+                               cue_counts, effective_cue_strength, memory_pattern,
+                               monte_carlo_recall, neuron_layout, run_stimulator,
+                               severity_for_connectivity)
 
 from .settings import Settings
 
@@ -42,10 +43,20 @@ def _verdict(m: dict) -> str:
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
-def _simulate(args: tuple) -> tuple[str, dict, dict]:
-    sev, noise, strength, _, mode, sweeps, thr, seed, _conn = args
-    return (_payload(run_stimulator(*args), args), recall_reliability(*args),
-            recall_reliability(0.0, noise, strength, False, mode, sweeps, thr, seed))
+def _simulate(args: tuple, mem: bool, noise_off: float) -> tuple[str, dict, dict]:
+    """The animated run, the Monte Carlo recall at these settings, the four drug scenarios at the
+    same brain settings (noise_off = input noise without memantine), and a healthy reference."""
+    sev, noise, strength, done, mode, sweeps, thr, seed, conn = args
+    mc = monte_carlo_recall(*args)
+    noise_on = _half(round(noise_off * 100)) / 100
+    scen = {}
+    for key, d, nz in (("none", False, noise_off), ("done", True, noise_off),
+                       ("mem", False, noise_on), ("both", True, noise_on)):
+        scen[key] = mc if (d == done and abs(nz - noise) < 1e-9) else monte_carlo_recall(
+            sev, nz, strength, d, mode, sweeps, thr, seed, conn)
+        scen[key] = {**scen[key], "noise": nz}
+    healthy = monte_carlo_recall(0.0, noise, strength, False, mode, sweeps, thr, seed)
+    return _payload(run_stimulator(*args), args, mc, mem), scen, healthy
 
 
 def _weight_matrix(W: np.ndarray, scale: float) -> list:
@@ -57,7 +68,7 @@ def _round(a, nd=3):
     return [None if np.isnan(v) else round(float(v), nd) for v in a]
 
 
-def _payload(r: dict, args: tuple) -> str:
+def _payload(r: dict, args: tuple, mc: dict, mem: bool) -> str:
     sev, noise, strength, done, *_ = args
     b = r["brain"]
     brain, m = b.brain, b.metrics
@@ -68,8 +79,9 @@ def _payload(r: dict, args: tuple) -> str:
     W_healthy = covariance_weights(memory_pattern())
     w_max = float(np.abs(W_healthy).max())
     title = "Healthy brain" if sev == 0 else f"Alzheimer's-inspired brain · {sev:.0%} severity"
-    if done:
-        title += " · donepezil"
+    drugs = [d for d, on in (("donepezil", done), ("memantine", mem)) if on]
+    if drugs:
+        title += " · " + " + ".join(drugs)
     n_alive = int(brain.alive.sum())
     chips = [f"synaptic strength {100 * brain.synaptic_strength():.0f}%",
              f"neurons {n_alive}/{n}",
@@ -86,7 +98,9 @@ def _payload(r: dict, args: tuple) -> str:
             "eff": [round(float(e), 2) for e in eff], "chips": chips, "verdict": _verdict(m),
             "atrophy": 1.0 - 0.22 * sev,
         }],
-        "cueNote": _cue_note(strength, noise),
+        "cueNote": _cue_note(strength, noise, done),
+        "mc": {"recall": mc["recall"], "lo": mc["lo"], "hi": mc["hi"], "recalled": mc["recalled"],
+               "n": mc["n"]},
         "weights": {"healthy": _weight_matrix(W_healthy, w_max),
                     "brain": _weight_matrix(b.weights, w_max),
                     "brainLabel": "This brain" + (" + donepezil" if done else ""),
@@ -95,9 +109,11 @@ def _payload(r: dict, args: tuple) -> str:
     return TEMPLATE.replace("__DATA__", json.dumps(data, separators=(",", ":")))
 
 
-def _cue_note(strength: float, noise: float) -> str:
-    lit, n_on, stray, n_off = cue_counts(strength, noise)
-    note = f"{lit} of the X's {n_on} neurons lit ({strength:.0%} cue strength)"
+def _cue_note(strength: float, noise: float, donepezil: bool = False) -> str:
+    eff = effective_cue_strength(strength, donepezil)
+    lit, n_on, stray, n_off = cue_counts(eff, noise)
+    note = f"{lit} of the X's {n_on} neurons lit ({strength:.0%} cue strength"
+    note += f", ×{DONEPEZIL_CUE_GAIN:g} with donepezil)" if donepezil else ")"
     if stray:
         note += f", plus {stray} of the other {n_off} firing by mistake ({noise:.0%} input noise)"
     if st.session_state.get("nl_mem"):
@@ -135,8 +151,8 @@ def _on_connectivity() -> None:
 
 def _controls() -> tuple[float, float, float, float, bool, bool]:
     ss = st.session_state
-    ss.setdefault("nl_noise", 10)
-    ss.setdefault("nl_sev", 65)
+    ss.setdefault("nl_noise", 40)
+    ss.setdefault("nl_sev", 57)
     ss.setdefault("nl_conn", connectivity_for_severity(ss["nl_sev"]))
     lo_conn = connectivity_for_severity(100)
     with st.container(border=True, key="nl_controls"):
@@ -164,33 +180,67 @@ def _controls() -> tuple[float, float, float, float, bool, bool]:
             st.markdown("<div class='nl-label'>Medical intervention</div>", unsafe_allow_html=True)
             done = st.toggle("Donepezil", key="nl_done",
                              help=f"AChE inhibitor, modelled as restoring {DONEPEZIL_RECOVERY:.0%} "
-                                  "of the lost synaptic strength on surviving neurons.")
+                                  "of the lost synaptic strength on surviving neurons and "
+                                  f"multiplying cue strength by {DONEPEZIL_CUE_GAIN:g} (stronger "
+                                  "cholinergic cue signal).")
             mem = st.toggle("Memantine", key="nl_mem", on_change=_on_memantine,
                             help=f"NMDA antagonist, modelled as cutting input noise by "
-                                 f"{MEMANTINE_NOISE_REDUCTION:.0%}. Turning it on moves the "
-                                 "Input noise slider down; turning it off moves it back.")
+                                 f"{MEMANTINE_NOISE_REDUCTION:.0%}. Fewer stray neurons fire in the "
+                                 "cue, so recall rises modestly. Turning it on moves the Input "
+                                 "noise slider down; turning it off moves it back.")
     return sev, conn, noise, strength, done, mem
 
 
-def _reliability(rel: dict, healthy: dict, sev: float) -> None:
-    n = rel["n"]
-    st.markdown(f"<div class='nl-label'>Is this run typical? Same brain, {n} fresh cues at these "
-                "settings</div>", unsafe_allow_html=True)
-    k, h = rel["recalled"], healthy["recalled"]
-    ref = "" if sev == 0 else (f"<small>A healthy brain recalls {h}/{n} of the same cues</small>")
-    st.markdown(f"<div class='nl-rel' style='--acc:rgb({_accent(sev)})'><span>This brain</span>"
-                f"<b>{k}/{n} recalled</b><div class='nl-track'><i style='width:{100 * k / n:.1f}%'>"
-                f"</i></div>{ref}</div>", unsafe_allow_html=True)
+def _noise_without_memantine(noise_pct: int, mem: bool) -> int:
+    """Input noise (in %) the brain would get with memantine off, for the scenario comparison."""
+    if not mem:
+        return noise_pct
+    ss = st.session_state
+    if "nl_noise_before_mem" in ss and ss.get("nl_noise_with_mem") == noise_pct:
+        return int(ss["nl_noise_before_mem"])
+    return min(NOISE_MAX, int(round(noise_pct / (1 - MEMANTINE_NOISE_REDUCTION))))
+
+
+SCENARIOS = (("none", "No medication"), ("done", "Donepezil"), ("mem", "Memantine"),
+             ("both", "Donepezil + memantine"))
+
+
+def _scenarios(scen: dict, healthy: dict, active: str, sev: float) -> None:
+    n = scen["none"]["n"]
+    st.markdown(f"<div class='nl-label'>Monte Carlo recall · {n:,} simulated trials per scenario, "
+                "each with a fresh brain at this severity, a fresh cue and a fresh update order"
+                "</div>", unsafe_allow_html=True)
+    base = scen["none"]["recall"]
+    tiles = []
+    for key, name in SCENARIOS:
+        r = scen[key]
+        delta = "" if key == "none" else f"<em>{100 * (r['recall'] - base):+.1f} pts</em>"
+        tiles.append(
+            f"<div class='nl-sc{' on' if key == active else ''}'><span>{name}</span>"
+            f"<b>{100 * r['recall']:.1f}%</b>{delta}"
+            f"<div class='nl-track'><i style='width:{100 * r['recall']:.1f}%'></i></div>"
+            f"<small>input noise {100 * r['noise']:.0f}% · 95% CI {100 * r['lo']:.1f}–"
+            f"{100 * r['hi']:.1f}% · {r['recalled']}/{r['n']} fully recalled</small></div>")
+    st.markdown(f"<div class='nl-scs' style='--acc:rgb({_accent(sev)})'>{''.join(tiles)}</div>",
+                unsafe_allow_html=True)
+    ref = "" if sev == 0 else (f"A healthy brain at the current cue and noise: "
+                               f"{100 * healthy['recall']:.1f}%. ")
+    st.caption(ref + "Recall = mean share of the 25 neurons matching the stored X once the network "
+               "settles (a silent network still matches the 16 neurons outside the X, so it scores "
+               "64%). Simulated outputs of an illustrative model, not clinical trial results.")
 
 
 def render_neurolab(s: Settings) -> None:
-    sev, conn, noise, strength, done, _ = _controls()
+    sev, conn, noise, strength, done, mem = _controls()
     args = (sev, noise, strength, done, SIMULATOR_MODE, s.ret.max_sweeps,
             s.ret.success_threshold, s.exp.base_seed, conn)
+    noise_off = _noise_without_memantine(round(noise * 100), mem) / 100
     with st.spinner("Running the brain…"):
-        html, rel, healthy = _simulate(args)
+        html, scen, healthy = _simulate(args, bool(mem), noise_off)
     st.iframe(html, height="content")
-    _reliability(rel, healthy, sev)
+    active = {(False, False): "none", (True, False): "done", (False, True): "mem",
+              (True, True): "both"}[(bool(done), bool(mem))]
+    _scenarios(scen, healthy, active, sev)
     with st.expander("How to read this"):
         st.markdown(
             "- The brain has stored one memory: an **X** on a 5×5 grid of 25 model neurons "
@@ -201,13 +251,19 @@ def render_neurolab(s: Settings) -> None:
             "along, a neuron or two), so each lit neuron delivers less input. A healthy brain "
             "completes the X from a 40% cue; a damaged one needs a stronger cue, and when it is "
             "severe enough no cue is enough.\n"
-            "- **Donepezil** gives back part of the lost synaptic strength. **Memantine** halves the "
-            "input noise; you will see the Input noise slider move.\n"
+            "- **Donepezil** gives back part of the lost synaptic strength and strengthens the cue. "
+            "**Memantine** halves the input noise (you will see the Input noise slider move), so "
+            "fewer stray neurons fight the memory and recall improves a little. Together they do "
+            "best.\n"
+            "- **Recall** is a Monte Carlo estimate: the same settings are simulated on 1,000 "
+            "random brains, cues and update orders, and the share of neurons that end up matching "
+            "the X is averaged. The animation replays trial 1 of those 1,000, so a single replay "
+            "can fail while the average is high, or the reverse.\n"
             "- In the disc each dot is a neuron: **amber = firing**, **violet = silent**, hollow = "
             "not in the cue yet. Neurons update one at a time in the exact order the simulation "
             "used; a ring marks each change. Lines are a sample of synapses (the model is fully "
             "connected): blue = consistent with the memory, red = in conflict, dotted = lost.\n"
-            "- The grid under the brain is the same neurons laid out as the 5×5 image. Recall counts "
+            "- The **Memory retrieved** grid is the same neurons laid out as the 5×5 image. Recall counts "
             f"as successful when the network settles and at least {s.ret.success_threshold:.0%} of "
             "all 25 neurons match the X (a lost neuron cannot fire, so it counts as silent).\n"
             "- **Synaptic weights wᵢⱼ**: the heatmaps show all 25×25 connection strengths, scaled so "
