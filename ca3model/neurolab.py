@@ -21,7 +21,7 @@ Model (illustrative abstraction, not pharmacology):
   damage     W_eff = W * E * alive_i * alive_j
              E from :func:`connectivity_efficacy` with connectivity
              c = 1 - SYNAPSE_LOSS_AT_MAX * severity, plus NEURON_LOSS_AT_MAX * severity * N
-             dead neurons, rounded up or down at random per brain (1-2 of 25 at 100% severity:
+             dead neurons, rounded up or down at random per brain (3-4 of 25 at 100% severity:
              synapse loss does most of the damage).
              The simulator uses attenuation (every synapse weakened by a random amount): with
              all-or-none deletion a single 25-neuron brain declines in lumpy cliffs.
@@ -34,14 +34,18 @@ Model (illustrative abstraction, not pharmacology):
   donepezil  recovers DONEPEZIL_RECOVERY of the lost synaptic efficacy on surviving neurons and
              multiplies cue strength by DONEPEZIL_CUE_GAIN (cholinergic boost to the cue signal)
   memantine  halves input noise (the UI moves the Input noise slider); fewer stray neurons fire in
-             the cue, so a few more cues get through and recall rises modestly
+             the cue, so a few more cues get through and recall rises modestly. It also spares
+             MEMANTINE_NEURON_PROTECTION of the neurons that would die (less excitotoxic
+             damage), so at the defaults a donepezil brain loses 2 neurons (a full recall
+             scores 96%) and a donepezil + memantine brain loses 1 (98%)
 
 Monte Carlo (:func:`monte_carlo_recall`): every trial draws a fresh brain at the chosen severity
 (which synapses weaken, which neurons die), a fresh cue and a fresh update order, and reports
 recall = mean share of the 25 neurons that match the X once the network settles. The animation
 replays the most typical trial (the one whose recall is closest to the average), so a lucky or
 unlucky single trial cannot misrepresent the scenario. With the defaults (57% severity, 40% cue, 40% input noise) it lands
-near 64% / 96% / 69% / 98% for none / donepezil / memantine / both. These are outputs of this toy
+near 64% / 96% / 69% / 98% for none / donepezil / memantine / both, and the replays show
+64 / 96 / 66 / 98%. These are outputs of this toy
 model with parameters chosen for teaching, not clinical efficacy figures.
 
 Damage uses common random numbers: one draw per seed, so a higher severity damages a superset of
@@ -68,10 +72,11 @@ N_NEURONS = GRID[0] * GRID[1]
 
 THRESHOLD_SYNAPSES = 1.75    # firing threshold, in units of one healthy memory-memory synapse
 SYNAPSE_LOSS_AT_MAX = 0.9    # share of synaptic strength lost at 100% severity
-NEURON_LOSS_AT_MAX = 0.07    # share of neurons lost at 100% severity (expected count)
-DONEPEZIL_RECOVERY = 0.45    # fraction of lost efficacy restored
-DONEPEZIL_CUE_GAIN = 2.25    # cue strength multiplier (capped at 100%)
+NEURON_LOSS_AT_MAX = 0.14    # share of neurons lost at 100% severity (expected count)
+DONEPEZIL_RECOVERY = 0.7     # fraction of lost efficacy restored
+DONEPEZIL_CUE_GAIN = 2.5     # cue strength multiplier (capped at 100%)
 MEMANTINE_NOISE_REDUCTION = 0.5  # fraction of input noise removed (applied by the UI)
+MEMANTINE_NEURON_PROTECTION = 0.5  # fraction of neuron loss prevented (less excitotoxic death)
 LOST_NEURON_CREDIT = 0.5     # recall credit for a lost neuron (neither right nor wrong)
 SIMULATOR_MODE = "attenuation"
 GOLDEN_ANGLE = np.pi * (3.0 - np.sqrt(5.0))
@@ -192,11 +197,15 @@ class Brain:
 
 
 def make_brain(severity: float, donepezil: bool = False, mode: str = SIMULATOR_MODE,
-               base_seed: int = 12345, connectivity: float | None = None) -> Brain:
+               base_seed: int = 12345, connectivity: float | None = None,
+               memantine: bool = False) -> Brain:
     """``connectivity`` (mean synaptic efficacy kept) overrides the one implied by severity;
-    severity still sets neuron loss."""
+    severity still sets neuron loss. ``memantine`` spares MEMANTINE_NEURON_PROTECTION of the
+    neurons that would die (a subset of the same brain's losses)."""
     pattern = memory_pattern()
     conn, loss = severity_damage(severity)
+    if memantine:
+        loss *= 1.0 - MEMANTINE_NEURON_PROTECTION
     if connectivity is not None:
         conn = float(np.clip(connectivity, 0.0, 1.0))
     draw = draw_damage_randomness(N_NEURONS, trial_rngs(base_seed, 0).damage)
@@ -287,10 +296,11 @@ def effective_cue_strength(strength: float, donepezil: bool) -> float:
 
 def run_stimulator(severity: float, noise: float, strength: float, donepezil: bool = False,
                    mode: str = SIMULATOR_MODE, max_sweeps: int = 30, threshold: float = 0.95,
-                   base_seed: int = 12345, connectivity: float | None = None) -> dict:
+                   base_seed: int = 12345, connectivity: float | None = None,
+                   memantine: bool = False) -> dict:
     """One brain at ``severity`` recalling the X from one cue."""
     target = memory_pattern()
-    brain = make_brain(severity, donepezil, mode, base_seed, connectivity)
+    brain = make_brain(severity, donepezil, mode, base_seed, connectivity, memantine)
     W = brain.effective_weights()
     cue = build_cue(target, effective_cue_strength(strength, donepezil), noise,
                     (base_seed * 7919) & 0xFFFFFFFF)
@@ -311,11 +321,11 @@ def run_stimulator(severity: float, noise: float, strength: float, donepezil: bo
 def recall_reliability(severity: float, noise: float, strength: float, donepezil: bool = False,
                        mode: str = SIMULATOR_MODE, max_sweeps: int = 30, threshold: float = 0.95,
                        base_seed: int = 12345, connectivity: float | None = None,
-                       n_cues: int = 40) -> dict:
+                       n_cues: int = 40, memantine: bool = False) -> dict:
     """Successes over ``n_cues`` fresh cues (different neurons lit) for the same brain as
     :func:`run_stimulator`. Shows whether the single animated run is typical."""
     target = memory_pattern()
-    brain = make_brain(severity, donepezil, mode, base_seed, connectivity)
+    brain = make_brain(severity, donepezil, mode, base_seed, connectivity, memantine)
     W = brain.effective_weights()
     ok = 0
     for k in range(n_cues):
@@ -333,7 +343,7 @@ MC_TRIALS = 1000
 def monte_carlo_recall(severity: float, noise: float, strength: float, donepezil: bool = False,
                        mode: str = SIMULATOR_MODE, max_sweeps: int = 30, threshold: float = 0.95,
                        base_seed: int = 12345, connectivity: float | None = None,
-                       n_trials: int = MC_TRIALS) -> dict:
+                       n_trials: int = MC_TRIALS, memantine: bool = False) -> dict:
     """Monte Carlo recall: trial k is :func:`run_stimulator` with seed ``base_seed + k`` (a fresh
     damage draw, cue and update order). Returns the mean accuracy (share of the 25 neurons
     matching the X after settling) with a 95% CI, how many trials met the success threshold, and
@@ -345,7 +355,7 @@ def monte_carlo_recall(severity: float, noise: float, strength: float, donepezil
     ok = 0
     for k in range(n_trials):
         seed = base_seed + k
-        brain = make_brain(severity, donepezil, mode, seed, connectivity)
+        brain = make_brain(severity, donepezil, mode, seed, connectivity, memantine)
         cue = build_cue(target, s_eff, noise, (seed * 7919) & 0xFFFFFFFF)
         orders = _orders(brain.alive, max_sweeps, [seed & 0xFFFFFFFF, 0])
         states, conv = settle(brain.effective_weights(), cue, brain.alive, brain.theta, orders)

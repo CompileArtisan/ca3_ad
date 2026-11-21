@@ -115,16 +115,16 @@ def test_connectivity_override_sets_mean_synaptic_efficacy():
 DEFAULTS = dict(severity=0.57, strength=0.40)
 
 
-def _mc(noise, donepezil, seed=12345):
+def _mc(noise, donepezil, seed=12345, memantine=False):
     from ca3model.neurolab import monte_carlo_recall
     return 100 * monte_carlo_recall(DEFAULTS["severity"], noise, DEFAULTS["strength"], donepezil,
-                                    base_seed=seed)["recall"]
+                                    base_seed=seed, memantine=memantine)["recall"]
 
 
 @pytest.mark.parametrize("seed", [12345, 1, 777])
 def test_drug_scenarios_hit_the_monte_carlo_targets(seed):
-    base, mem = _mc(0.40, False, seed), _mc(0.20, False, seed)
-    done, both = _mc(0.40, True, seed), _mc(0.20, True, seed)
+    base, mem = _mc(0.40, False, seed), _mc(0.20, False, seed, memantine=True)
+    done, both = _mc(0.40, True, seed), _mc(0.20, True, seed, memantine=True)
     assert 63.5 <= base <= 66.0          # ~64%: the damaged brain mostly goes silent
     assert 68.0 <= mem <= 71.0           # memantine: noise 40% -> 20% lifts recall modestly
     assert 95.0 <= done <= 97.0          # donepezil: ~96%
@@ -140,17 +140,35 @@ def test_monte_carlo_trial_one_is_the_animated_run():
     assert one["recall"] == pytest.approx(run["accuracy"])
 
 
-@pytest.mark.parametrize("noise,donepezil", [(0.40, False), (0.20, False), (0.40, True), (0.20, True)])
-def test_animated_replay_is_a_typical_trial(noise, donepezil):
+@pytest.mark.parametrize("noise,donepezil,memantine", [(0.40, False, False), (0.20, False, True),
+                                                       (0.40, True, False), (0.20, True, True)])
+def test_animated_replay_is_a_typical_trial(noise, donepezil, memantine):
     """The replay must not show a lucky trial: memantine's replay showed 96% next to a 69% mean."""
     from ca3model.neurolab import monte_carlo_recall
-    mc = monte_carlo_recall(0.57, noise, 0.40, donepezil)
-    run = run_stimulator(0.57, noise, 0.40, donepezil, base_seed=12345 + mc["rep"])["brain"].metrics
+    mc = monte_carlo_recall(0.57, noise, 0.40, donepezil, memantine=memantine)
+    run = run_stimulator(0.57, noise, 0.40, donepezil, base_seed=12345 + mc["rep"],
+                         memantine=memantine)["brain"].metrics
     assert run["accuracy"] == pytest.approx(mc["rep_accuracy"])
     assert abs(run["accuracy"] - mc["recall"]) <= 0.06
 
 
+@pytest.mark.parametrize("noise,donepezil,memantine,shown", [(0.40, True, False, 0.96),
+                                                             (0.20, True, True, 0.98)])
+def test_donepezil_replays_96_and_combination_98(noise, donepezil, memantine, shown):
+    """Same brain, so memantine must change the replay: it spares one of donepezil's 2 lost neurons."""
+    from ca3model.neurolab import monte_carlo_recall
+    mc = monte_carlo_recall(0.57, noise, 0.40, donepezil, memantine=memantine)
+    assert mc["rep_accuracy"] == pytest.approx(shown)
+
+
+def test_memantine_spares_a_subset_of_the_lost_neurons():
+    for seed in range(12345, 12395):
+        lost = ~make_brain(0.57, True, base_seed=seed).alive
+        lost_mem = ~make_brain(0.57, True, base_seed=seed, memantine=True).alive
+        assert np.all(lost_mem <= lost) and lost_mem.sum() < lost.sum()
+
+
 def test_memantine_replay_matches_its_modest_effect():
     from ca3model.neurolab import monte_carlo_recall
-    mc = monte_carlo_recall(0.57, 0.20, 0.40, False)
+    mc = monte_carlo_recall(0.57, 0.20, 0.40, False, memantine=True)
     assert mc["rep_accuracy"] < 0.75          # a typical memantine trial is not a full recall

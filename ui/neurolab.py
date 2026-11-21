@@ -13,7 +13,8 @@ import numpy as np
 import streamlit as st
 
 from ca3model.neurolab import (DONEPEZIL_CUE_GAIN, DONEPEZIL_RECOVERY, GRID,
-                               MEMANTINE_NOISE_REDUCTION, NEURON_LOSS_AT_MAX, SIMULATOR_MODE,
+                               MEMANTINE_NEURON_PROTECTION, MEMANTINE_NOISE_REDUCTION,
+                               NEURON_LOSS_AT_MAX, SIMULATOR_MODE,
                                SYNAPSE_LOSS_AT_MAX, connectivity_for_severity, covariance_weights,
                                cue_counts, effective_cue_strength, memory_pattern,
                                monte_carlo_recall, neuron_layout, run_stimulator,
@@ -52,19 +53,20 @@ def _simulate(args: tuple, mem: bool, noise_off: float, code_key: str = CODE_KEY
     """The animated run, the Monte Carlo recall at these settings, the four drug scenarios at the
     same brain settings (noise_off = input noise without memantine), and a healthy reference."""
     sev, noise, strength, done, mode, sweeps, thr, seed, conn = args
-    mc = monte_carlo_recall(*args)
+    mc = monte_carlo_recall(*args, memantine=mem)
     noise_on = _half(round(noise_off * 100)) / 100
     scen = {}
-    for key, d, nz in (("none", False, noise_off), ("done", True, noise_off),
-                       ("mem", False, noise_on), ("both", True, noise_on)):
-        scen[key] = mc if (d == done and abs(nz - noise) < 1e-9) else monte_carlo_recall(
-            sev, nz, strength, d, mode, sweeps, thr, seed, conn)
+    for key, d, m in (("none", False, False), ("done", True, False),
+                      ("mem", False, True), ("both", True, True)):
+        nz = noise_on if m else noise_off
+        scen[key] = mc if (d == done and m == mem and abs(nz - noise) < 1e-9) else monte_carlo_recall(
+            sev, nz, strength, d, mode, sweeps, thr, seed, conn, memantine=m)
         scen[key] = {**scen[key], "noise": nz}
     healthy = monte_carlo_recall(0.0, noise, strength, False, mode, sweeps, thr, seed)
     # Animate the most typical trial, not trial 1: a single lucky trial (e.g. one of memantine's
     # ~15% full recalls) would otherwise show 96% next to a 69% average.
     rep_args = args[:7] + (seed + mc["rep"],) + args[8:]
-    return _payload(run_stimulator(*rep_args), args, mc, mem), scen, healthy
+    return _payload(run_stimulator(*rep_args, memantine=mem), args, mc, mem), scen, healthy
 
 
 def _weight_matrix(W: np.ndarray, scale: float) -> list:
@@ -193,9 +195,11 @@ def _controls() -> tuple[float, float, float, float, bool, bool]:
                                   "cholinergic cue signal).")
             mem = st.toggle("Memantine", key="nl_mem", on_change=_on_memantine,
                             help=f"NMDA antagonist, modelled as cutting input noise by "
-                                 f"{MEMANTINE_NOISE_REDUCTION:.0%}. Fewer stray neurons fire in the "
-                                 "cue, so recall rises modestly. Turning it on moves the Input "
-                                 "noise slider down; turning it off moves it back.")
+                                 f"{MEMANTINE_NOISE_REDUCTION:.0%} and sparing "
+                                 f"{MEMANTINE_NEURON_PROTECTION:.0%} of the neurons that would die "
+                                 "(less excitotoxic damage). Fewer stray neurons fire in the cue, "
+                                 "so recall rises modestly. Turning it on moves the Input noise "
+                                 "slider down; turning it off moves it back.")
     return sev, conn, noise, strength, done, mem
 
 
@@ -261,8 +265,8 @@ def render_neurolab(s: Settings) -> None:
             "severe enough no cue is enough.\n"
             "- **Donepezil** gives back part of the lost synaptic strength and strengthens the cue. "
             "**Memantine** halves the input noise (you will see the Input noise slider move), so "
-            "fewer stray neurons fight the memory and recall improves a little. Together they do "
-            "best.\n"
+            "fewer stray neurons fight the memory, and spares half of the neurons that would die "
+            "(less excitotoxic damage). Recall improves a little. Together they do best.\n"
             "- **Recall** is a Monte Carlo estimate: the same settings are simulated on 1,000 "
             "random brains, cues and update orders, and the share of neurons that end up matching "
             "the X is averaged. The animation replays the most typical of those 1,000 trials "
